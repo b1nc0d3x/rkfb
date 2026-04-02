@@ -32,12 +32,22 @@ struct rkfb_regdump {
 	uint32_t count;
 };
 
+struct rkfb_regop {
+	uint32_t block;   /* 0 = VOP, 1 = GRF, 2 = CRU, 3 = HDMI */
+	uint32_t off;
+	uint32_t val;
+};
+
+
+
 #define RKFB_GETINFO _IOR(RKFB_IOCTL_BASE, 0, struct rkfb_info)
 #define RKFB_CLEAR _IOW(RKFB_IOCTL_BASE, 1, struct rkfb_fill)
 #define RKFB_FILLRECT _IOW(RKFB_IOCTL_BASE, 2, struct rkfb_rect)
 #define RKFB_DUMPREGS _IO(RKFB_IOCTL_BASE, 3)
 #define RKFB_VOP_DUMP_RANGE _IOW(RKFB_IOCTL_BASE, 4, struct rkfb_regdump)
 #define RKFB_HDMI_DUMP_RANGE _IOW(RKFB_IOCTL_BASE, 5, struct rkfb_regdump)
+#define RKFB_REG_READ  _IOWR(RKFB_IOCTL_BASE, 6, struct rkfb_regop)
+#define RKFB_REG_WRITE  _IOW(RKFB_IOCTL_BASE, 7, struct rkfb_regop)
 
 
 #endif

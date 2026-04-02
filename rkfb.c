@@ -72,6 +72,22 @@ rkfb_vop_read4(struct rkfb_softc *sc, size_t off)
   return (*reg);
 }
 
+static int
+rkfb_vop_write_allowed(uint32_t off)
+{
+	switch (off) {
+	case 0x020c:
+	case 0x028c:
+	case 0x029c:
+	case 0x0310:
+	case 0x0314:
+	case 0x0318:
+		return (1);
+	default:
+		return (0);
+	}
+}
+
 static inline void
 rkfb_vop_write(struct rkfb_softc *sc, size_t off, uint32_t val)
 {
@@ -162,6 +178,29 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread 
 
 	switch (cmd) {
 
+
+	  case RKFB_REG_WRITE: {
+		struct rkfb_regop *ro;
+
+		ro = (struct rkfb_regop *)data;
+
+		if (ro->block != 0)
+			return (EPERM);
+		if ((ro->off & 0x3) != 0)
+			return (EINVAL);
+		if (ro->off >= sc->vop_size)
+			return (EINVAL);
+		if (!rkfb_vop_write_allowed(ro->off))
+			return (EPERM);
+
+		printf("rkfb: REG_WRITE VOP[0x%04x] <= 0x%08x\n",
+		    ro->off, ro->val);
+
+		rkfb_vop_write(sc, ro->off, ro->val);
+
+		return (0);
+	}
+
 	  	case RKFB_VOP_DUMP_RANGE: {
 		struct rkfb_regdump *rd;
 		uint32_t off, i;
@@ -186,6 +225,41 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread 
 
 		printf("rkfb: -------------------------------------------\n");
 		return (0);
+	}
+
+
+		  	case RKFB_REG_READ: {
+		struct rkfb_regop *ro;
+
+		ro = (struct rkfb_regop *)data;
+
+		if ((ro->off & 0x3) != 0)
+			return (EINVAL);
+
+		switch (ro->block) {
+		case 0:
+			if (ro->off >= sc->vop_size)
+				return (EINVAL);
+			ro->val = rkfb_vop_read4(sc, ro->off);
+			return (0);
+		case 1:
+			if (ro->off >= sc->grf_size)
+				return (EINVAL);
+			ro->val = rkfb_grf_read4(sc, ro->off);
+			return (0);
+		case 2:
+			if (ro->off >= sc->cru_size)
+				return (EINVAL);
+			ro->val = rkfb_cru_read4(sc, ro->off);
+			return (0);
+		case 3:
+			if (ro->off >= sc->hdmi_size)
+				return (EINVAL);
+			ro->val = rkfb_hdmi_read4(sc, ro->off);
+			return (0);
+		default:
+			return (EINVAL);
+		}
 	}
 
 		  case RKFB_HDMI_DUMP_RANGE: {
