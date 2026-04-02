@@ -32,6 +32,24 @@ struct rkfb_softc {
 	vm_paddr_t fb_pa;
 	size_t fb_size;
 
+  //    VISUAL OUTPUT PROCESSOR
+  
+        vm_offset_t vop_va;
+        vm_paddr_t vop_pa;
+        size_t vop_size;
+
+  //    GENERAL REGISTER FILE
+  
+        vm_offset_t grf_va;
+        vm_paddr_t grf_pa;
+        size_t grf_size;
+
+
+  //    CLOCK RESET UNIT
+        vm_offset_t cru_va;
+        vm_paddr_t cru_pa;
+        size_t cru_size;
+
 	uint32_t width;
 	uint32_t height;
 	uint32_t bpp;
@@ -39,6 +57,42 @@ struct rkfb_softc {
 
 	struct mtx mtx;
 };
+
+static inline uint32_t
+rkfb_vop_read4(struct rkfb_softc *sc, size_t off)
+{
+  volatile uint32_t *reg;
+  reg = (volatile uint32_t *)(sc->vop_va + off);
+  return (*reg);
+}
+
+static inline void
+rkfb_vop_write(struct rkfb_softc *sc, size_t off, uint32_t val)
+{
+  volatile uint32_t *reg;
+  reg = (volatile uint32_t *)(sc->vop_va + off);
+  *reg = val;
+}
+
+
+static inline uint32_t
+rkfb_grf_read4(struct rkfb_softc *sc, size_t off)
+{
+	volatile uint32_t *reg;
+
+	reg = (volatile uint32_t *)(sc->grf_va + off);
+	return (*reg);
+}
+
+static inline uint32_t
+rkfb_cru_read4(struct rkfb_softc *sc, size_t off)
+{
+	volatile uint32_t *reg;
+
+	reg = (volatile uint32_t *)(sc->cru_va + off);
+	return (*reg);
+}
+
 
 static struct rkfb_softc g_rkfb_sc;
 
@@ -232,6 +286,67 @@ rkfb_modevent(module_t mod, int type, void *data)
 
 		sc->fb_pa = pmap_kextract(sc->fb_va);
 
+		sc->vop_pa = 0xff900000;
+		sc->vop_size = 0x10000;
+		sc->vop_va = (vm_offset_t)pmap_mapdev(sc->vop_pa, sc->vop_size);
+
+		if (sc->vop_va == 0) {
+			printf("rkfb: failed to map VOP at %#jx\n",
+			    (uintmax_t)sc->vop_pa);
+			if (sc->cdev != NULL)
+				destroy_dev(sc->cdev);
+			kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
+			mtx_destroy(&sc->mtx);
+			return (ENXIO);
+		}
+
+		printf("rkfb: VOP mapped pa=%#jx va=%#jx size=%#zx\n",
+		    (uintmax_t)sc->vop_pa, (uintmax_t)sc->vop_va, sc->vop_size);
+
+		printf("rkfb: VOP[0x0000] = 0x%08x\n",
+		    rkfb_vop_read4(sc, 0x0000));
+		printf("rkfb: VOP[0x0004] = 0x%08x\n",
+		    rkfb_vop_read4(sc, 0x0004));
+		printf("rkfb: VOP[0x0008] = 0x%08x\n",
+		    rkfb_vop_read4(sc, 0x0008));
+		printf("rkfb: VOP[0x0010] = 0x%08x\n",
+		    rkfb_vop_read4(sc, 0x0010));
+
+		sc->grf_pa = 0xff320000;
+sc->grf_size = 0x1000;
+sc->grf_va = (vm_offset_t)pmap_mapdev(sc->grf_pa, sc->grf_size);
+if (sc->grf_va == 0) {
+	printf("rkfb: failed to map GRF at %#jx\n", (uintmax_t)sc->grf_pa);
+	pmap_unmapdev((void *)sc->vop_va, sc->vop_size);
+	kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
+	mtx_destroy(&sc->mtx);
+	return (ENXIO);
+}
+
+sc->cru_pa = 0xff760000;
+sc->cru_size = 0x1000;
+sc->cru_va = (vm_offset_t)pmap_mapdev(sc->cru_pa, sc->cru_size);
+if (sc->cru_va == 0) {
+	printf("rkfb: failed to map CRU at %#jx\n", (uintmax_t)sc->cru_pa);
+	pmap_unmapdev((void *)sc->grf_va, sc->grf_size);
+	pmap_unmapdev((void *)sc->vop_va, sc->vop_size);
+	kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
+	mtx_destroy(&sc->mtx);
+	return (ENXIO);
+ }
+
+ printf("rkfb: GRF mapped pa=%#jx va=%#jx size=%#zx\n",
+    (uintmax_t)sc->grf_pa, (uintmax_t)sc->grf_va, sc->grf_size);
+printf("rkfb: CRU mapped pa=%#jx va=%#jx size=%#zx\n",
+    (uintmax_t)sc->cru_pa, (uintmax_t)sc->cru_va, sc->cru_size);
+
+printf("rkfb: GRF[0x0000] = 0x%08x\n", rkfb_grf_read4(sc, 0x0000));
+printf("rkfb: GRF[0x0004] = 0x%08x\n", rkfb_grf_read4(sc, 0x0004));
+
+printf("rkfb: CRU[0x0000] = 0x%08x\n", rkfb_cru_read4(sc, 0x0000));
+printf("rkfb: CRU[0x0004] = 0x%08x\n", rkfb_cru_read4(sc, 0x0004));
+printf("rkfb: CRU[0x0008] = 0x%08x\n", rkfb_cru_read4(sc, 0x0008));
+
 		sc->cdev = make_dev(&rkfb_cdevsw, 0, UID_ROOT, GID_WHEEL, 0600,
 		    "rkfb0");
 		if (sc->cdev == NULL) {
@@ -254,6 +369,14 @@ rkfb_modevent(module_t mod, int type, void *data)
 		if (sc->fb_va != 0)
 			kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
 
+                  if (sc->cru_va != 0)
+	pmap_unmapdev((void *)sc->cru_va, sc->cru_size);
+
+if (sc->grf_va != 0)
+	pmap_unmapdev((void *)sc->grf_va, sc->grf_size);
+		
+		if (sc->vop_va != 0)
+		  pmap_unmapdev((void*)sc->vop_va, sc->vop_size);
 		mtx_destroy(&sc->mtx);
 		printf("rkfb: unloaded\n");
 		break;
