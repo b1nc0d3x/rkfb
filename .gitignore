@@ -5,6 +5,13 @@
 *.d
 *.depend
 
+# Executables
+rkfb_clear
+rkfb_fill
+rkfb_info
+rect_readback
+a.out
+
 # FreeBSD module build dirs
 obj/
 *.debug
@@ -12,3 +19,9 @@ obj/
 # Temp files
 *~
 *.swp
+
+export_syms
+machine
+opt_global.h
+
+rkfb-o*
