@@ -1,0 +1,270 @@
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/kernel.h>
+#include <sys/module.h>
+#include <sys/conf.h>
+#include <sys/uio.h>
+#include <sys/malloc.h>
+#include <sys/types.h>
+#include <sys/lock.h>
+#include <sys/mutex.h>
+#include <sys/ioccom.h>
+#include <sys/errno.h>
+/*#include <sys/bus.h>
+#include <dev/ofw/ofw_bus.h>
+#include <dev/ofw/ofw_bus_subr.h>
+#include <machine/bus.h>
+#include <sys/rman.h>*/
+#include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/vm_extern.h>
+
+#include "rkfb_ioctl.h"
+
+#define RKFB_WIDTH   1024
+#define RKFB_HEIGHT   768
+#define RKFB_BPP       32
+
+struct rkfb_softc {
+	struct cdev *cdev;
+
+	vm_offset_t fb_va;
+	vm_paddr_t fb_pa;
+	size_t fb_size;
+
+	uint32_t width;
+	uint32_t height;
+	uint32_t bpp;
+	uint32_t stride;
+
+	struct mtx mtx;
+};
+
+static struct rkfb_softc g_rkfb_sc;
+
+static d_open_t  rkfb_open;
+static d_close_t rkfb_close;
+static d_ioctl_t rkfb_ioctl;
+static d_read_t  rkfb_read;
+static d_write_t rkfb_write;
+
+static struct cdevsw rkfb_cdevsw = {
+	.d_version = D_VERSION,
+	.d_open = rkfb_open,
+	.d_close = rkfb_close,
+	.d_ioctl = rkfb_ioctl,
+	.d_read = rkfb_read,
+	.d_write = rkfb_write,
+	.d_name = "rkfb",
+};
+
+static int
+rkfb_open(struct cdev *dev, int oflags, int devtype, struct thread *td)
+{
+	struct rkfb_softc *sc = dev->si_drv1;
+
+	if (sc == NULL)
+		return (ENXIO);
+
+	return (0);
+}
+
+static int
+rkfb_close(struct cdev *dev, int fflag, int devtype, struct thread *td)
+{
+	struct rkfb_softc *sc = dev->si_drv1;
+
+	if (sc == NULL)
+		return (ENXIO);
+
+	return (0);
+}
+
+static int
+rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread *td)
+{
+	struct rkfb_softc *sc = dev->si_drv1;
+	struct rkfb_info *info;
+
+	if (sc == NULL)
+		return (ENXIO);
+	
+	switch (cmd) {
+	case RKFB_GETINFO:
+		info = (struct rkfb_info *)data;
+		info->width = sc->width;
+		info->height = sc->height;
+		info->bpp = sc->bpp;
+		info->stride = sc->stride;
+		info->fb_size = sc->fb_size;
+		return (0);
+        case RKFB_CLEAR: {
+		struct rkfb_fill *fill;
+		uint32_t *p;
+		size_t count, i;
+
+		fill = (struct rkfb_fill *)data;
+		p = (uint32_t *)sc->fb_va;
+		count = sc->fb_size / sizeof(uint32_t);
+
+		for (i = 0; i < count; i++)
+			p[i] = fill->pixel;
+
+		return (0);
+	}
+
+	case RKFB_FILLRECT: {
+	       struct rkfb_rect *r;
+	       uint32_t *fb;
+	       uint32_t x, y;
+
+	       r = (struct rkfb_rect *)data;
+	       fb = (uint32_t *)sc->fb_va;
+
+
+	       printf("rkfb: fillrect x=%u y=%u w=%u h=%u pixel=0x%08x\n",
+		      r->x, r->y, r->w, r->h, r->pixel);
+	/* Clamp to screen bounds */
+	       if (r->x >= sc->width || r->y >= sc->height)
+		return (EINVAL);
+
+	       uint32_t max_x = r->x + r->w;
+	       uint32_t max_y = r->y + r->h;
+
+	       if (max_x > sc->width)
+		max_x = sc->width;
+	       if (max_y > sc->height)
+		max_y = sc->height;
+
+	       for (y = r->y; y < max_y; y++) {
+		for (x = r->x; x < max_x; x++) {
+			fb[y * sc->width + x] = r->pixel;
+		}
+	}
+
+	       printf("rkfb: clamped to max_x=%u max_y=%u\n", max_x, max_y);
+
+	return (0);
+	  }
+
+	default:
+		return (ENOTTY);
+	}
+}
+
+static int
+rkfb_read(struct cdev *dev, struct uio *uio, int ioflag)
+{
+	struct rkfb_softc *sc = dev->si_drv1;
+	size_t available;
+	int error;
+
+	if (sc == NULL)
+		return (ENXIO);
+
+	if ((size_t)uio->uio_offset >= sc->fb_size)
+		return (0);
+
+	available = sc->fb_size - (size_t)uio->uio_offset;
+	if (uio->uio_resid < available)
+		available = uio->uio_resid;
+
+	error = uiomove((void *)(sc->fb_va + uio->uio_offset), available, uio);
+	return (error);
+}
+
+static int
+rkfb_write(struct cdev *dev, struct uio *uio, int ioflag)
+{
+	struct rkfb_softc *sc = dev->si_drv1;
+	size_t available;
+	int error;
+
+	if (sc == NULL)
+		return (ENXIO);
+
+	if ((size_t)uio->uio_offset >= sc->fb_size)
+		return (ENOSPC);
+
+	available = sc->fb_size - (size_t)uio->uio_offset;
+	if (uio->uio_resid < available)
+		available = uio->uio_resid;
+
+	error = uiomove((void *)(sc->fb_va + uio->uio_offset), available, uio);
+	return (error);
+}
+
+static int
+rkfb_modevent(module_t mod, int type, void *data)
+{
+	struct rkfb_softc *sc;
+	int error;
+
+	sc = &g_rkfb_sc;
+	error = 0;
+
+	switch (type) {
+	case MOD_LOAD:
+		bzero(sc, sizeof(*sc));
+
+		sc->width = RKFB_WIDTH;
+		sc->height = RKFB_HEIGHT;
+		sc->bpp = RKFB_BPP;
+		sc->stride = sc->width * (sc->bpp / 8);
+		sc->fb_size = sc->stride * sc->height;
+
+		mtx_init(&sc->mtx, "rkfb", NULL, MTX_DEF);
+
+		sc->fb_va = (vm_offset_t)kmem_alloc_contig(
+		    round_page(sc->fb_size),
+		    M_WAITOK | M_ZERO,
+		    0,
+		    ~0UL,
+		    PAGE_SIZE,
+		    0,
+		    VM_MEMATTR_WRITE_COMBINING);
+
+		if (sc->fb_va == 0) {
+			printf("rkfb: failed to allocate framebuffer memory\n");
+			mtx_destroy(&sc->mtx);
+			return (ENOMEM);
+		}
+
+		sc->fb_pa = pmap_kextract(sc->fb_va);
+
+		sc->cdev = make_dev(&rkfb_cdevsw, 0, UID_ROOT, GID_WHEEL, 0600,
+		    "rkfb0");
+		if (sc->cdev == NULL) {
+			printf("rkfb: failed to create /dev/rkfb0\n");
+			kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
+			mtx_destroy(&sc->mtx);
+			return (ENXIO);
+		}
+		sc->cdev->si_drv1 = sc;
+
+		printf("rkfb: loaded /dev/rkfb0 %ux%u %u-bpp stride=%u size=%zu pa=%#jx\n",
+		    sc->width, sc->height, sc->bpp, sc->stride, sc->fb_size,
+		    (uintmax_t)sc->fb_pa);
+		break;
+
+	case MOD_UNLOAD:
+		if (sc->cdev != NULL)
+			destroy_dev(sc->cdev);
+
+		if (sc->fb_va != 0)
+			kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
+
+		mtx_destroy(&sc->mtx);
+		printf("rkfb: unloaded\n");
+		break;
+
+	default:
+		error = EOPNOTSUPP;
+		break;
+	}
+
+	return (error);
+}
+
+DEV_MODULE(rkfb, rkfb_modevent, NULL);
+MODULE_VERSION(rkfb, 1);
