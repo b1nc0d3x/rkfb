@@ -38,6 +38,12 @@ struct rkfb_softc {
         vm_paddr_t vop_pa;
         size_t vop_size;
 
+  //   HDMI
+  
+       vm_offset_t hdmi_va;
+       vm_paddr_t hdmi_pa;
+       size_t hdmi_size;
+
   //    GENERAL REGISTER FILE
   
         vm_offset_t grf_va;
@@ -90,6 +96,15 @@ rkfb_cru_read4(struct rkfb_softc *sc, size_t off)
 	volatile uint32_t *reg;
 
 	reg = (volatile uint32_t *)(sc->cru_va + off);
+	return (*reg);
+}
+
+static inline uint32_t
+rkfb_hdmi_read4(struct rkfb_softc *sc, size_t off)
+{
+	volatile uint32_t *reg;
+
+	reg = (volatile uint32_t *)(sc->hdmi_va + off);
 	return (*reg);
 }
 
@@ -172,6 +187,32 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread 
 		printf("rkfb: -------------------------------------------\n");
 		return (0);
 	}
+
+		  case RKFB_HDMI_DUMP_RANGE: {
+	struct rkfb_regdump *rd;
+	uint32_t off, i;
+
+	rd = (struct rkfb_regdump *)data;
+
+	if ((rd->base & 0x3) != 0)
+		return (EINVAL);
+	if (rd->count == 0 || rd->count > 64)
+		return (EINVAL);
+	if (rd->base + rd->count * 4 > sc->hdmi_size)
+		return (EINVAL);
+
+	printf("rkfb: ---- HDMI range dump base=0x%08x count=%u ----\n",
+	    rd->base, rd->count);
+
+	for (i = 0; i < rd->count; i++) {
+		off = rd->base + i * 4;
+		printf("rkfb: HDMI[0x%04x] = 0x%08x\n",
+		    off, rkfb_hdmi_read4(sc, off));
+	}
+
+	printf("rkfb: --------------------------------------------\n");
+	return (0);
+}
 
 	case RKFB_DUMPREGS:
 		printf("rkfb: ---- register dump ----\n");
@@ -358,13 +399,13 @@ rkfb_modevent(module_t mod, int type, void *data)
 		    rkfb_vop_read4(sc, 0x0010));
 
 		sc->grf_pa = 0xff320000;
-sc->grf_size = 0x1000;
-sc->grf_va = (vm_offset_t)pmap_mapdev(sc->grf_pa, sc->grf_size);
-if (sc->grf_va == 0) {
-	printf("rkfb: failed to map GRF at %#jx\n", (uintmax_t)sc->grf_pa);
-	pmap_unmapdev((void *)sc->vop_va, sc->vop_size);
-	kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
-	mtx_destroy(&sc->mtx);
+		sc->grf_size = 0x1000;
+		sc->grf_va = (vm_offset_t)pmap_mapdev(sc->grf_pa, sc->grf_size);
+		if (sc->grf_va == 0) {
+		  printf("rkfb: failed to map GRF at %#jx\n", (uintmax_t)sc->grf_pa);
+		pmap_unmapdev((void *)sc->vop_va, sc->vop_size);
+		kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
+		mtx_destroy(&sc->mtx);
 	return (ENXIO);
 }
 
@@ -392,6 +433,31 @@ printf("rkfb: CRU[0x0000] = 0x%08x\n", rkfb_cru_read4(sc, 0x0000));
 printf("rkfb: CRU[0x0004] = 0x%08x\n", rkfb_cru_read4(sc, 0x0004));
 printf("rkfb: CRU[0x0008] = 0x%08x\n", rkfb_cru_read4(sc, 0x0008));
 
+
+                  sc->hdmi_pa = 0xff940000;
+sc->hdmi_size = 0x10000;
+sc->hdmi_va = (vm_offset_t)pmap_mapdev(sc->hdmi_pa, sc->hdmi_size);
+
+if (sc->hdmi_va == 0) {
+	printf("rkfb: failed to map HDMI at %#jx\n",
+	    (uintmax_t)sc->hdmi_pa);
+	pmap_unmapdev((void *)sc->cru_va, sc->cru_size);
+	pmap_unmapdev((void *)sc->grf_va, sc->grf_size);
+	pmap_unmapdev((void *)sc->vop_va, sc->vop_size);
+	kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
+	mtx_destroy(&sc->mtx);
+	return (ENXIO);
+}
+
+ printf("rkfb: HDMI mapped pa=%#jx va=%#jx size=%#zx\n",
+    (uintmax_t)sc->hdmi_pa, (uintmax_t)sc->hdmi_va, sc->hdmi_size);
+
+printf("rkfb: HDMI[0x0000] = 0x%08x\n", rkfb_hdmi_read4(sc, 0x0000));
+printf("rkfb: HDMI[0x0004] = 0x%08x\n", rkfb_hdmi_read4(sc, 0x0004));
+printf("rkfb: HDMI[0x0008] = 0x%08x\n", rkfb_hdmi_read4(sc, 0x0008));
+printf("rkfb: HDMI[0x0010] = 0x%08x\n", rkfb_hdmi_read4(sc, 0x0010));
+
+ 
 		sc->cdev = make_dev(&rkfb_cdevsw, 0, UID_ROOT, GID_WHEEL, 0600,
 		    "rkfb0");
 		if (sc->cdev == NULL) {
@@ -419,6 +485,9 @@ printf("rkfb: CRU[0x0008] = 0x%08x\n", rkfb_cru_read4(sc, 0x0008));
 
 if (sc->grf_va != 0)
 	pmap_unmapdev((void *)sc->grf_va, sc->grf_size);
+
+ if (sc->hdmi_va != 0)
+	pmap_unmapdev((void *)sc->hdmi_va, sc->hdmi_size);
 		
 		if (sc->vop_va != 0)
 		  pmap_unmapdev((void*)sc->vop_va, sc->vop_size);

@@ -37,5 +37,7 @@ struct rkfb_regdump {
 #define RKFB_FILLRECT _IOW(RKFB_IOCTL_BASE, 2, struct rkfb_rect)
 #define RKFB_DUMPREGS _IO(RKFB_IOCTL_BASE, 3)
 #define RKFB_VOP_DUMP_RANGE _IOW(RKFB_IOCTL_BASE, 4, struct rkfb_regdump)
+#define RKFB_HDMI_DUMP_RANGE _IOW(RKFB_IOCTL_BASE, 5, struct rkfb_regdump)
+
 
 #endif
