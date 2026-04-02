@@ -1,0 +1,14 @@
+# Build artifacts
+*.o
+*.ko
+*.core
+*.d
+*.depend
+
+# FreeBSD module build dirs
+obj/
+*.debug
+
+# Temp files
+*~
+*.swp
