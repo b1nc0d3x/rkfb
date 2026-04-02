@@ -30,6 +30,6 @@ struct rkfb_fill {
 #define RKFB_GETINFO _IOR(RKFB_IOCTL_BASE, 0, struct rkfb_info)
 #define RKFB_CLEAR _IOW(RKFB_IOCTL_BASE, 1, struct rkfb_fill)
 #define RKFB_FILLRECT _IOW(RKFB_IOCTL_BASE, 2, struct rkfb_rect)
-
+#define RKFB_DUMPREGS _IO(RKFB_IOCTL_BASE, 3)
 
 #endif
