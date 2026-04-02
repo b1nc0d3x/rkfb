@@ -143,9 +143,37 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread 
 	if (sc == NULL)
 		return (ENXIO);
 	
+	
+
 	switch (cmd) {
 
-		case RKFB_DUMPREGS:
+	  	case RKFB_VOP_DUMP_RANGE: {
+		struct rkfb_regdump *rd;
+		uint32_t off, i;
+
+		rd = (struct rkfb_regdump *)data;
+
+		if ((rd->base & 0x3) != 0)
+			return (EINVAL);
+		if (rd->count == 0 || rd->count > 64)
+			return (EINVAL);
+		if (rd->base + rd->count * 4 > sc->vop_size)
+			return (EINVAL);
+
+		printf("rkfb: ---- VOP range dump base=0x%08x count=%u ----\n",
+		    rd->base, rd->count);
+
+		for (i = 0; i < rd->count; i++) {
+			off = rd->base + i * 4;
+			printf("rkfb: VOP[0x%04x] = 0x%08x\n",
+			    off, rkfb_vop_read4(sc, off));
+		}
+
+		printf("rkfb: -------------------------------------------\n");
+		return (0);
+	}
+
+	case RKFB_DUMPREGS:
 		printf("rkfb: ---- register dump ----\n");
 		printf("rkfb: VOP[0x0000] = 0x%08x\n", rkfb_vop_read4(sc, 0x0000));
 		printf("rkfb: VOP[0x0004] = 0x%08x\n", rkfb_vop_read4(sc, 0x0004));
