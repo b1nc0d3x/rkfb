@@ -144,6 +144,22 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread 
 		return (ENXIO);
 	
 	switch (cmd) {
+
+		case RKFB_DUMPREGS:
+		printf("rkfb: ---- register dump ----\n");
+		printf("rkfb: VOP[0x0000] = 0x%08x\n", rkfb_vop_read4(sc, 0x0000));
+		printf("rkfb: VOP[0x0004] = 0x%08x\n", rkfb_vop_read4(sc, 0x0004));
+		printf("rkfb: VOP[0x0008] = 0x%08x\n", rkfb_vop_read4(sc, 0x0008));
+		printf("rkfb: VOP[0x0010] = 0x%08x\n", rkfb_vop_read4(sc, 0x0010));
+
+		printf("rkfb: GRF[0x0000] = 0x%08x\n", rkfb_grf_read4(sc, 0x0000));
+		printf("rkfb: GRF[0x0004] = 0x%08x\n", rkfb_grf_read4(sc, 0x0004));
+
+		printf("rkfb: CRU[0x0000] = 0x%08x\n", rkfb_cru_read4(sc, 0x0000));
+		printf("rkfb: CRU[0x0004] = 0x%08x\n", rkfb_cru_read4(sc, 0x0004));
+		printf("rkfb: CRU[0x0008] = 0x%08x\n", rkfb_cru_read4(sc, 0x0008));
+		printf("rkfb: -----------------------\n");
+		return (0);  
 	case RKFB_GETINFO:
 		info = (struct rkfb_info *)data;
 		info->width = sc->width;
@@ -166,8 +182,9 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread 
 
 		return (0);
 	}
+	
 
-	case RKFB_FILLRECT: {
+	case RKFB_FILLRECT:{ 
 	       struct rkfb_rect *r;
 	       uint32_t *fb;
 	       uint32_t x, y;
@@ -199,7 +216,7 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread 
 	       printf("rkfb: clamped to max_x=%u max_y=%u\n", max_x, max_y);
 
 	return (0);
-	  }
+	}
 
 	default:
 		return (ENOTTY);
