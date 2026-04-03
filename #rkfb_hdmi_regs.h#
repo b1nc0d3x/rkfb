@@ -1,0 +1,220 @@
+#ifndef _RKFB_HDMI_REGS_H_
+#define _RKFB_HDMI_REGS_H_
+
+/*
+ * rkfb_hdmi_regs.h
+ *
+ * Neutral RK3399/RockPro64 HDMI register offsets for rkfb experiments.
+ *
+ * Scope:
+ *   - Base address used on RockPro64 RK3399 experiments: 0xFF940000
+ *   - Low offsets observed directly on the user's hardware
+ *   - Additional offset groups that are publicly visible in Linux's
+ *     generic Synopsys DesignWare HDMI driver/header, rewritten here with
+ *     neutral offset-based names rather than Linux register names
+ *
+ * Intent:
+ *   - Research / bring-up aid
+ *   - Avoid Linux identifier reuse in FreeBSD-side experimental code
+ *
+ * Notes:
+ *   - All offsets are byte offsets from the HDMI controller base.
+ *   - "Observed" comments come from the user's live MMIO dumps.
+ *   - Not all offsets below have been live-tested on this board yet.
+ */
+
+#include <sys/types.h>
+#include <stdint.h>
+
+/* Base address used in current experiments */
+#define RKFB_HDMI_BASE                       0xFF940000u
+
+/* Observed groups on the user's hardware */
+#define RKFB_HDMI_GRP_ID_LOW_START           0x0000u
+#define RKFB_HDMI_GRP_ID_LOW_END             0x001Cu
+
+#define RKFB_HDMI_GRP_ZERO_0040_START        0x0040u
+#define RKFB_HDMI_GRP_ZERO_0040_END          0x007Cu
+
+#define RKFB_HDMI_GRP_ZERO_0080_START        0x0080u
+#define RKFB_HDMI_GRP_ZERO_0080_END          0x00BCu
+
+#define RKFB_HDMI_GRP_ZERO_0100_START        0x0100u
+#define RKFB_HDMI_GRP_ZERO_0100_END          0x013Cu
+
+#define RKFB_HDMI_GRP_ZERO_0200_START        0x0200u
+#define RKFB_HDMI_GRP_ZERO_0200_END          0x023Cu
+
+#define RKFB_HDMI_GRP_ZERO_0300_START        0x0300u
+#define RKFB_HDMI_GRP_ZERO_0300_END          0x033Cu
+
+/*
+ * Low identification / status-like region observed directly
+ * on the user's RockPro64.
+ */
+#define RKFB_HDMI_REG_0000                   0x0000u /* observed: 0x00000021 */
+#define RKFB_HDMI_REG_0004                   0x0004u /* observed: 0x0000001A */
+#define RKFB_HDMI_REG_0008                   0x0008u /* observed: 0x000000A0 */
+#define RKFB_HDMI_REG_000C                   0x000Cu /* observed: 0x000000C1 */
+#define RKFB_HDMI_REG_0010                   0x0010u /* observed: 0x000000BF */
+#define RKFB_HDMI_REG_0014                   0x0014u /* observed: 0x00000062 */
+#define RKFB_HDMI_REG_0018                   0x0018u /* observed: 0x000000F3 */
+#define RKFB_HDMI_REG_001C                   0x001Cu /* observed: 0x00000000 */
+
+#define RKFB_HDMI_REG_0020                   0x0020u /* observed: 0x00000000 */
+#define RKFB_HDMI_REG_0024                   0x0024u /* observed: 0x00000000 */
+#define RKFB_HDMI_REG_0028                   0x0028u /* observed: 0x00000000 */
+#define RKFB_HDMI_REG_002C                   0x002Cu /* observed: 0x00000000 */
+#define RKFB_HDMI_REG_0030                   0x0030u /* observed: 0x00000000 */
+#define RKFB_HDMI_REG_0034                   0x0034u /* observed: 0x00000000 */
+#define RKFB_HDMI_REG_0038                   0x0038u /* observed: 0x00000000 */
+#define RKFB_HDMI_REG_003C                   0x003Cu /* observed: 0x00000000 */
+
+/*
+ * Publicly visible generic DW-HDMI register regions from Linux source,
+ * rewritten as neutral offset-only defines.
+ *
+ * These are useful for further probing even when the exact field semantics
+ * are not yet mapped into rkfb.
+ */
+
+/* Interrupt status block (Linux generic DW-HDMI shows this at 0x0100-0x0109) */
+#define RKFB_HDMI_REG_0100                   0x0100u
+#define RKFB_HDMI_REG_0101                   0x0101u
+#define RKFB_HDMI_REG_0102                   0x0102u
+#define RKFB_HDMI_REG_0103                   0x0103u
+#define RKFB_HDMI_REG_0104                   0x0104u
+#define RKFB_HDMI_REG_0105                   0x0105u
+#define RKFB_HDMI_REG_0106                   0x0106u
+#define RKFB_HDMI_REG_0107                   0x0107u
+#define RKFB_HDMI_REG_0108                   0x0108u
+#define RKFB_HDMI_REG_0109                   0x0109u
+
+/* Interrupt mute block (Linux generic DW-HDMI shows this at 0x0180-0x0189, 0x01FF) */
+#define RKFB_HDMI_REG_0180                   0x0180u
+#define RKFB_HDMI_REG_0181                   0x0181u
+#define RKFB_HDMI_REG_0182                   0x0182u
+#define RKFB_HDMI_REG_0183                   0x0183u
+#define RKFB_HDMI_REG_0184                   0x0184u
+#define RKFB_HDMI_REG_0185                   0x0185u
+#define RKFB_HDMI_REG_0186                   0x0186u
+#define RKFB_HDMI_REG_0187                   0x0187u
+#define RKFB_HDMI_REG_0188                   0x0188u
+#define RKFB_HDMI_REG_0189                   0x0189u
+#define RKFB_HDMI_REG_01FF                   0x01FFu
+
+/* TX input/sample block (Linux generic DW-HDMI shows this at 0x0200-0x0207) */
+#define RKFB_HDMI_REG_0200                   0x0200u
+#define RKFB_HDMI_REG_0201                   0x0201u
+#define RKFB_HDMI_REG_0202                   0x0202u
+#define RKFB_HDMI_REG_0203                   0x0203u
+#define RKFB_HDMI_REG_0204                   0x0204u
+#define RKFB_HDMI_REG_0205                   0x0205u
+#define RKFB_HDMI_REG_0206                   0x0206u
+#define RKFB_HDMI_REG_0207                   0x0207u
+
+/* Video packetizer block (Linux generic DW-HDMI shows this at 0x0800-0x0808) */
+#define RKFB_HDMI_REG_0800                   0x0800u
+#define RKFB_HDMI_REG_0801                   0x0801u
+#define RKFB_HDMI_REG_0802                   0x0802u
+#define RKFB_HDMI_REG_0803                   0x0803u
+#define RKFB_HDMI_REG_0804                   0x0804u
+#define RKFB_HDMI_REG_0805                   0x0805u
+#define RKFB_HDMI_REG_0806                   0x0806u
+#define RKFB_HDMI_REG_0807                   0x0807u
+#define RKFB_HDMI_REG_0808                   0x0808u
+
+/* Frame composer block (partial useful low subset from Linux generic DW-HDMI) */
+#define RKFB_HDMI_REG_1000                   0x1000u
+#define RKFB_HDMI_REG_1001                   0x1001u
+#define RKFB_HDMI_REG_1002                   0x1002u
+#define RKFB_HDMI_REG_1003                   0x1003u
+#define RKFB_HDMI_REG_1004                   0x1004u
+#define RKFB_HDMI_REG_1005                   0x1005u
+#define RKFB_HDMI_REG_1006                   0x1006u
+#define RKFB_HDMI_REG_1007                   0x1007u
+#define RKFB_HDMI_REG_1008                   0x1008u
+#define RKFB_HDMI_REG_1009                   0x1009u
+#define RKFB_HDMI_REG_100A                   0x100Au
+#define RKFB_HDMI_REG_100B                   0x100Bu
+#define RKFB_HDMI_REG_100C                   0x100Cu
+#define RKFB_HDMI_REG_100D                   0x100Du
+#define RKFB_HDMI_REG_100E                   0x100Eu
+#define RKFB_HDMI_REG_100F                   0x100Fu
+#define RKFB_HDMI_REG_1010                   0x1010u
+#define RKFB_HDMI_REG_1011                   0x1011u
+#define RKFB_HDMI_REG_1012                   0x1012u
+#define RKFB_HDMI_REG_1013                   0x1013u
+#define RKFB_HDMI_REG_1014                   0x1014u
+
+/* PHY block (Linux generic DW-HDMI shows this at 0x3000+) */
+#define RKFB_HDMI_REG_3000                   0x3000u
+#define RKFB_HDMI_REG_3001                   0x3001u
+#define RKFB_HDMI_REG_3002                   0x3002u
+#define RKFB_HDMI_REG_3003                   0x3003u
+#define RKFB_HDMI_REG_3004                   0x3004u
+#define RKFB_HDMI_REG_3005                   0x3005u
+#define RKFB_HDMI_REG_3006                   0x3006u
+#define RKFB_HDMI_REG_3007                   0x3007u
+
+#define RKFB_HDMI_REG_3020                   0x3020u
+#define RKFB_HDMI_REG_3021                   0x3021u
+#define RKFB_HDMI_REG_3022                   0x3022u
+#define RKFB_HDMI_REG_3023                   0x3023u
+#define RKFB_HDMI_REG_3024                   0x3024u
+#define RKFB_HDMI_REG_3025                   0x3025u
+#define RKFB_HDMI_REG_3026                   0x3026u
+#define RKFB_HDMI_REG_3027                   0x3027u
+#define RKFB_HDMI_REG_3028                   0x3028u
+#define RKFB_HDMI_REG_3029                   0x3029u
+
+/* Main controller block (Linux generic DW-HDMI shows this at 0x4000-0x4007) */
+#define RKFB_HDMI_REG_4000                   0x4000u
+#define RKFB_HDMI_REG_4001                   0x4001u
+#define RKFB_HDMI_REG_4002                   0x4002u
+#define RKFB_HDMI_REG_4003                   0x4003u
+#define RKFB_HDMI_REG_4004                   0x4004u
+#define RKFB_HDMI_REG_4005                   0x4005u
+#define RKFB_HDMI_REG_4006                   0x4006u
+#define RKFB_HDMI_REG_4007                   0x4007u
+
+/*
+ * Curated offsets worth probing first.
+ * These are chosen because they are either observed live on the user's
+ * hardware or belong to generic DW-HDMI blocks that commonly matter during
+ * bring-up.
+ */
+static const uint32_t rkfb_hdmi_key_regs[] = {
+	RKFB_HDMI_REG_0000,
+	RKFB_HDMI_REG_0004,
+	RKFB_HDMI_REG_0008,
+	RKFB_HDMI_REG_000C,
+	RKFB_HDMI_REG_0010,
+	RKFB_HDMI_REG_0014,
+	RKFB_HDMI_REG_0018,
+	RKFB_HDMI_REG_0100,
+	RKFB_HDMI_REG_0104,
+	RKFB_HDMI_REG_0108,
+	RKFB_HDMI_REG_0180,
+	RKFB_HDMI_REG_0184,
+	RKFB_HDMI_REG_0188,
+	RKFB_HDMI_REG_0200,
+	RKFB_HDMI_REG_0800,
+	RKFB_HDMI_REG_0804,
+	RKFB_HDMI_REG_1000,
+	RKFB_HDMI_REG_1008,
+	RKFB_HDMI_REG_100A,
+	RKFB_HDMI_REG_100E,
+	RKFB_HDMI_REG_3000,
+	RKFB_HDMI_REG_3004,
+	RKFB_HDMI_REG_3026,
+	RKFB_HDMI_REG_4000,
+	RKFB_HDMI_REG_4001,
+	RKFB_HDMI_REG_4002,
+	RKFB_HDMI_REG_4005
+};
+
+#define RKFB_HDMI_KEY_REG_COUNT \
+	(sizeof(rkfb_hdmi_key_regs) / sizeof(rkfb_hdmi_key_regs[0]))
+
+#endif /* _RKFB_HDMI_REGS_H_ */
