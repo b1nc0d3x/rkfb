@@ -38,6 +38,13 @@ struct rkfb_regop {
 	uint32_t val;
 };
 
+struct rkfb_regmaskop {
+	uint32_t block;   /* 0 = VOP, 1 = GRF, 2 = CRU, 3 = HDMI */
+	uint32_t off;
+	uint32_t val;
+	uint32_t mask;
+};
+
 
 
 #define RKFB_GETINFO _IOR(RKFB_IOCTL_BASE, 0, struct rkfb_info)
@@ -48,6 +55,6 @@ struct rkfb_regop {
 #define RKFB_HDMI_DUMP_RANGE _IOW(RKFB_IOCTL_BASE, 5, struct rkfb_regdump)
 #define RKFB_REG_READ  _IOWR(RKFB_IOCTL_BASE, 6, struct rkfb_regop)
 #define RKFB_REG_WRITE  _IOW(RKFB_IOCTL_BASE, 7, struct rkfb_regop)
-
+#define RKFB_VOP_MASKWRITE _IOW(RKFB_IOCTL_BASE, 8, struct rkfb_regmaskop)
 
 #endif

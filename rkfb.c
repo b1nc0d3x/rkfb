@@ -178,6 +178,28 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread 
 
 	switch (cmd) {
 
+	case RKFB_VOP_MASKWRITE: {
+		struct rkfb_regmaskop *mo;
+		uint32_t writeval;
+
+		mo = (struct rkfb_regmaskop *)data;
+
+	if ((mo->off & 0x3) != 0)
+		return (EINVAL);
+	if (mo->off >= sc->vop_size)
+		return (EINVAL);
+	if (!rkfb_vop_write_allowed(mo->off))
+		return (EPERM);
+
+	writeval = ((mo->mask & 0xffff) << 16) | (mo->val& 0xffff);
+
+	printf("rkfb: MASKWRITE VOP[0x%04x] mask=0x%04x value=0x%04x raw=0x%08x\n",
+	    mo->off, mo->mask & 0xffff, mo->val & 0xffff, writeval);
+
+	rkfb_vop_write(sc, mo->off, writeval);
+	return (0);
+}
+
 
 	  case RKFB_REG_WRITE: {
 		struct rkfb_regop *ro;
@@ -228,7 +250,7 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag, struct thread 
 	}
 
 
-		  	case RKFB_REG_READ: {
+		case RKFB_REG_READ: {
 		struct rkfb_regop *ro;
 
 		ro = (struct rkfb_regop *)data;
