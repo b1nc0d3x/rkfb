@@ -1,0 +1,8 @@
+KMOD=	rkfb_hdmi_mon
+SRCS=	rkfb_hdmi_mon.c
+
+# Pull in the shared HDMI register header from the parent directory.
+# If you keep everything flat in one directory, drop the -I line.
+#CFLAGS+=	-I${.CURDIR}
+CFLAGS+=	${CURDIR}
+.include <bsd.kmod.mk>
