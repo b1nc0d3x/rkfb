@@ -29,15 +29,15 @@
 #include <vm/vm.h>
 #include <vm/pmap.h>
 #include <vm/vm_extern.h>
-
+#include <sys/fbio.h>
 #include "rkfb_ioctl.h"
 
 /* -------------------------------------------------------------------------
  * Constants
  * ---------------------------------------------------------------------- */
 
-#define RKFB_WIDTH      1024
-#define RKFB_HEIGHT      768
+#define RKFB_WIDTH      1280
+#define RKFB_HEIGHT      720
 #define RKFB_BPP          32
 
 #define HDMI_PHY_I2C_ADDR  0x69
@@ -86,6 +86,17 @@ struct rkfb_softc {
   
         struct mtx      mtx;
 };
+
+/* Minimal vt_device declaration — avoids pulling in vt.h and its deps */
+struct vt_device {
+  const void      *vd_driver;     /* struct vt_driver * */
+  void            *vd_softc;      /* fb_info * for efifb */
+  /* we only need vd_softc, rest is opaque */
+  /* pad to avoid touching beyond vd_softc */
+};
+
+extern struct vt_device vt_consdev;
+
 
 static struct rkfb_softc g_rkfb_sc;
 
@@ -845,8 +856,28 @@ rkfb_modevent(module_t mod, int type, void *data)
 		/* PMU power domain status */
 		printf("rkfb: PMU_PWRDN_ST  [0x0098] = 0x%08x\n",
 		    rkfb_pmu_read4(sc, 0x0098));
-
+                
 		
+
+		/* Read efifb address from vt_consdev */
+		{
+		  extern struct vt_device vt_consdev;
+		  struct fb_info *fbi = (struct fb_info *)vt_consdev.vd_softc;
+		  if (fbi != NULL) {
+		    printf("rkfb: efifb pbase  = 0x%016lx\n",
+			   (unsigned long)fbi->fb_pbase);
+		    printf("rkfb: efifb size   = 0x%08x\n",
+			   fbi->fb_size);
+		    printf("rkfb: efifb width  = %u\n",
+			   fbi->fb_width);
+		    printf("rkfb: efifb height = %u\n",
+			   fbi->fb_height);
+		    printf("rkfb: efifb stride = %u\n",
+			   fbi->fb_stride);
+		  } else {
+		    printf("rkfb: vt_consdev softc is NULL\n");
+		  }
+		}
                 break;
 
         case MOD_UNLOAD:
