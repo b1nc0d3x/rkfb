@@ -96,7 +96,7 @@ struct vt_device {
   /* pad to avoid touching beyond vd_softc */
 };
 
-extern struct vt_device vt_consdev;
+
 
 
 static struct rkfb_softc g_rkfb_sc;
@@ -191,6 +191,8 @@ rkfb_cru_write4(struct rkfb_softc *sc, size_t off, uint32_t val)
         volatile uint32_t *reg;
         reg = (volatile uint32_t *)(sc->cru_va + off);
         *reg = val;
+	__asm volatile("dsb sy" ::: "memory");
+        __asm volatile("isb" ::: "memory");
 }
 
 /* -------------------------------------------------------------------------
@@ -211,6 +213,8 @@ rkfb_hdmi_write1(struct rkfb_softc *sc, size_t off, uint8_t val)
         volatile uint8_t *reg;
         reg = (volatile uint8_t *)(sc->hdmi_va + off);
         *reg = val;
+	__asm volatile("dsb sy" ::: "memory");
+        __asm volatile("isb" ::: "memory");
 }
 
 
@@ -491,23 +495,40 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                 return (0);
         }
 
-        /* ---- VOP raw write ---------------------------------------------- */
+        /* ---- raw write (VOP, GRF, CRU) ---------------------------------- */
         case RKFB_REG_WRITE: {
                 struct rkfb_regop *ro = (struct rkfb_regop *)data;
 
-                if (ro->block != 0)
-                        return (EPERM);
                 if ((ro->off & 0x3) != 0)
                         return (EINVAL);
-                if (ro->off >= sc->vop_size)
-                        return (EINVAL);
-                if (!rkfb_vop_write_allowed(ro->off))
-                        return (EPERM);
 
-                printf("rkfb: REG_WRITE VOP[0x%04x] <= 0x%08x\n",
-                    ro->off, ro->val);
-                rkfb_vop_write4(sc, ro->off, ro->val);
-                return (0);
+                switch (ro->block) {
+                case 0: /* VOP */
+                        if (ro->off >= sc->vop_size)
+                                return (EINVAL);
+                        if (!rkfb_vop_write_allowed(ro->off))
+                                return (EPERM);
+                        printf("rkfb: REG_WRITE VOP[0x%04x] <= 0x%08x\n",
+                            ro->off, ro->val);
+                        rkfb_vop_write4(sc, ro->off, ro->val);
+                        return (0);
+                case 1: /* GRF */
+                        if (ro->off >= sc->grf_size)
+                                return (EINVAL);
+                        printf("rkfb: REG_WRITE GRF[0x%04x] <= 0x%08x\n",
+                            ro->off, ro->val);
+                        rkfb_grf_write4(sc, ro->off, ro->val);
+                        return (0);
+                case 2: /* CRU */
+                        if (ro->off >= sc->cru_size)
+                                return (EINVAL);
+                        printf("rkfb: REG_WRITE CRU[0x%04x] <= 0x%08x\n",
+                            ro->off, ro->val);
+                        rkfb_cru_write4(sc, ro->off, ro->val);
+                        return (0);
+                default:
+                        return (EPERM);
+                }
         }
 
         /* ---- VOP range dump --------------------------------------------- */
@@ -855,10 +876,9 @@ rkfb_modevent(module_t mod, int type, void *data)
 		printf("rkfb: PMU mapped pa=0x%jx\n", (uintmax_t)sc->pmu_pa);
 
 		/* PMU power domain status */
-		printf("rkfb: PMU_PWRDN_ST  [0x0098] = 0x%08x\n",
-		       rkfb_pmu_read4(sc, 0x0098));                
-		
-
+		printf("rkfb: PMU_PWRDN_ST  [0x0018] = 0x%08x\n",
+		    rkfb_pmu_read4(sc, 0x0018));
+                
 		break;
 
         case MOD_UNLOAD:
@@ -875,6 +895,8 @@ rkfb_modevent(module_t mod, int type, void *data)
                         pmap_unmapdev((void *)sc->grf_va, sc->grf_size);
                 if (sc->vop_va != 0)
                         pmap_unmapdev((void *)sc->vop_va, sc->vop_size);
+                if (sc->pmu_va != 0)
+                        pmap_unmapdev((void *)sc->pmu_va, sc->pmu_size);
                 mtx_destroy(&sc->mtx);
                 printf("rkfb: unloaded\n");
                 break;
