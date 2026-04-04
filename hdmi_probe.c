@@ -234,7 +234,9 @@ uint32_t act = ((info.height - 1) << 16) | (info.width - 1);
 
 
 
-	
+printf("fb_pa32 = 0x%08x\n", fb_pa32);
+printf("vir     = 0x%08x\n", vir);
+printf("act     = 0x%08x\n", act);	
 /* Our framebuffer physical address from rkfb load message */
 /* pa=0xc8400000 from dmesg */
 //uint32_t fb_pa = 0xc8400000;
@@ -243,13 +245,14 @@ uint32_t act = ((info.height - 1) << 16) | (info.width - 1);
 /* Active: 1920x1080, format ARGB8888 */
 /* VIR: stride in 32-bit words = 1920 = 0x780 */
 
-vop_write(0x0040, fb_pa32);              /* WIN0_YRGB_MST — FB address    */
-vop_write(0x003c, 0x07800780);        /* WIN0_VIR — stride 1920 words  */
-vop_write(0x0048, 0x0437077f);        /* WIN0_ACT_INFO — 1080h x 1920w */
-vop_write(0x004c, 0x0437077f);        /* WIN0_DSP_INFO — same          */
-vop_write(0x0050, 0x00000000);        /* WIN0_DSP_ST — start at 0,0    */
-vop_write(0x0030, 0x00000011);        /* WIN0_CTRL0 — enable, ARGB8888 */
-vop_write(0x0000, 0x00000001);        /* REG_CFG_DONE — latch all      */
+/* 1280x720, stride = 1280 words = 0x500 */
+vop_write(0x0040, fb_pa32);
+vop_write(0x003c, 0x05000500);    /* WIN0_VIR  — 1280-word stride */
+vop_write(0x0048, 0x02cf04ff);    /* WIN0_ACT_INFO — 720x1280     */
+vop_write(0x004c, 0x02cf04ff);    /* WIN0_DSP_INFO — same         */
+vop_write(0x0050, 0x00000000);    /* WIN0_DSP_ST                  */
+vop_write(0x0030, 0x00000011);    /* WIN0_CTRL0 — enable ARGB8888 */
+vop_write(0x0000, 0x00000001);    /* REG_CFG_DONE                 */
 
 printf("Scanout programmed. Check display.\n");
 printf("WIN0_CTRL0    = 0x%08x\n", vop_read(0x0030));
