@@ -573,6 +573,7 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                 info->bpp     = sc->bpp;
                 info->stride  = sc->stride;
                 info->fb_size = sc->fb_size;
+		info->fb_pa   = (uint64_t)sc->fb_pa;
                 return (0);
 
         case RKFB_CLEAR: {
