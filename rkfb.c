@@ -96,7 +96,7 @@ struct vt_device {
   /* pad to avoid touching beyond vd_softc */
 };
 
-
+extern struct vt_device vt_consdev;
 
 
 static struct rkfb_softc g_rkfb_sc;
@@ -856,8 +856,9 @@ rkfb_modevent(module_t mod, int type, void *data)
 
 		/* PMU power domain status */
 		printf("rkfb: PMU_PWRDN_ST  [0x0098] = 0x%08x\n",
-		    rkfb_pmu_read4(sc, 0x0098));
-                
+		       rkfb_pmu_read4(sc, 0x0098));                
+		
+
 		break;
 
         case MOD_UNLOAD:
