@@ -12,6 +12,7 @@ struct rkfb_info {
 	uint32_t bpp;
 	uint32_t stride;
 	uint64_t fb_size;
+        uint64_t fb_pa;
 };
 
 struct rkfb_rect {
@@ -44,7 +45,6 @@ struct rkfb_regmaskop {
 	uint32_t val;
 	uint32_t mask;
 };
-
 
 
 #define RKFB_GETINFO _IOR(RKFB_IOCTL_BASE, 0, struct rkfb_info)

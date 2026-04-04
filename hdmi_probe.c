@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include "rkfb_ioctl.h"
+#include <string.h>
 
 static int g_fd;
 
@@ -200,7 +201,59 @@ main(void)
 	vop_write(0x0040, 0x12345678);
 	printf("WIN0_YRGB_MST after  = 0x%08x\n", vop_read(0x0040));
 	vop_write(0x0040, 0x00000000);  /* restore */
+
+
+
+	printf("\n--- VOP WIN0 scanout setup ---\n");
+
+	struct rkfb_info info;
+memset(&info, 0, sizeof(info));
+if (ioctl(g_fd, RKFB_GETINFO, &info) < 0) {
+        perror("RKFB_GETINFO");
+        close(g_fd);
+        return (1);
+}
+printf("\n--- FB Info ---\n");
+printf("fb_pa  = 0x%016llx\n", (unsigned long long)info.fb_pa);
+printf("width  = %u\n", info.width);
+printf("height = %u\n", info.height);
+printf("stride = %u\n", info.stride);
+
+printf("\n--- VOP WIN0 scanout setup ---\n");
+uint32_t fb_pa32 = (uint32_t)(info.fb_pa & 0xffffffff);
+
+/* Fill FB with a solid blue so we can see it */
+struct rkfb_fill fill;
+fill.pixel = 0xff0000ff;   /* ARGB blue */
+if (ioctl(g_fd, RKFB_CLEAR, &fill) < 0)
+        perror("RKFB_CLEAR");
+
+/* stride in 32-bit words = width = 1024 = 0x400 */
+uint32_t vir = (info.stride / 4) | ((info.stride / 4) << 16);
+uint32_t act = ((info.height - 1) << 16) | (info.width - 1);
+
+
+
 	
+/* Our framebuffer physical address from rkfb load message */
+/* pa=0xc8400000 from dmesg */
+//uint32_t fb_pa = 0xc8400000;
+
+/* 1080p timing values */
+/* Active: 1920x1080, format ARGB8888 */
+/* VIR: stride in 32-bit words = 1920 = 0x780 */
+
+vop_write(0x0040, fb_pa32);              /* WIN0_YRGB_MST — FB address    */
+vop_write(0x003c, 0x07800780);        /* WIN0_VIR — stride 1920 words  */
+vop_write(0x0048, 0x0437077f);        /* WIN0_ACT_INFO — 1080h x 1920w */
+vop_write(0x004c, 0x0437077f);        /* WIN0_DSP_INFO — same          */
+vop_write(0x0050, 0x00000000);        /* WIN0_DSP_ST — start at 0,0    */
+vop_write(0x0030, 0x00000011);        /* WIN0_CTRL0 — enable, ARGB8888 */
+vop_write(0x0000, 0x00000001);        /* REG_CFG_DONE — latch all      */
+
+printf("Scanout programmed. Check display.\n");
+printf("WIN0_CTRL0    = 0x%08x\n", vop_read(0x0030));
+printf("WIN0_YRGB_MST = 0x%08x\n", vop_read(0x0040));
         close(g_fd);
         return (0);
 }
