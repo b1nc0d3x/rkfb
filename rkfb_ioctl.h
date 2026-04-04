@@ -56,5 +56,6 @@ struct rkfb_regmaskop {
 #define RKFB_REG_READ  _IOWR(RKFB_IOCTL_BASE, 6, struct rkfb_regop)
 #define RKFB_REG_WRITE  _IOW(RKFB_IOCTL_BASE, 7, struct rkfb_regop)
 #define RKFB_VOP_MASKWRITE _IOW(RKFB_IOCTL_BASE, 8, struct rkfb_regmaskop)
+#define RKFB_HDMI_REG_WRITE  _IOW('r', 10, struct rkfb_regop)
 
 #endif
