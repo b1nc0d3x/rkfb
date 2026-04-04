@@ -1,0 +1,334 @@
+---<<BOOT>>---
+WARNING: Cannot find freebsd,dts-version property, cannot check DTB compliance
+Copyright (c) 1992-2025 The FreeBSD Project.
+Copyright (c) 1979, 1980, 1983, 1986, 1988, 1989, 1991, 1992, 1993, 1994
+	The Regents of the University of California. All rights reserved.
+FreeBSD is a registered trademark of The FreeBSD Foundation.
+FreeBSD 15.0-RELEASE-p4 GENERIC arm64
+FreeBSD clang version 19.1.7 (https://github.com/llvm/llvm-project.git llvmorg-19.1.7-0-gcd708029e0b2)
+VT(efifb): resolution 1280x720
+real memory  = 4125474816 (3934 MB)
+avail memory = 4010532864 (3824 MB)
+Starting CPU 1 (1)
+Starting CPU 2 (2)
+Starting CPU 3 (3)
+Starting CPU 4 (100)
+Starting CPU 5 (101)
+FreeBSD/SMP: Multiprocessor System Detected: 6 CPUs
+random: unblocking device.
+random: entropy device external interface
+kbd0 at kbdmux0
+ofwbus0: <Open Firmware Device Tree>
+rk_grf0: <RockChip General Register Files> mem 0xff320000-0xff320fff on ofwbus0
+rk3399_pmucru0: <Rockchip RK3399 PMU Clock and Reset Unit> mem 0xff750000-0xff750fff on ofwbus0
+rk3399_cru0: <Rockchip RK3399 Clock and Reset Unit> mem 0xff760000-0xff760fff on ofwbus0
+rk_grf1: <RockChip General Register Files> mem 0xff770000-0xff77ffff on ofwbus0
+regfix0: <Fixed Regulator> on ofwbus0
+regfix1: <Fixed Regulator> on ofwbus0
+regfix2: <Fixed Regulator> on ofwbus0
+regfix3: <Fixed Regulator> on ofwbus0
+regfix4: <Fixed Regulator> on ofwbus0
+regfix5: <Fixed Regulator> on ofwbus0
+regfix6: <Fixed Regulator> on ofwbus0
+regfix7: <Fixed Regulator> on ofwbus0
+regfix8: <Fixed Regulator> on ofwbus0
+regfix9: <Fixed Regulator> on ofwbus0
+debug0: <Coresight CPU Debug> mem 0xfe430000-0xfe430fff on ofwbus0
+debug1: <Coresight CPU Debug> mem 0xfe432000-0xfe432fff on ofwbus0
+debug2: <Coresight CPU Debug> mem 0xfe434000-0xfe434fff on ofwbus0
+debug3: <Coresight CPU Debug> mem 0xfe436000-0xfe436fff on ofwbus0
+debug4: <Coresight CPU Debug> mem 0xfe610000-0xfe610fff on ofwbus0
+debug5: <Coresight CPU Debug> mem 0xfe710000-0xfe710fff on ofwbus0
+simple_mfd0: <Simple MFD (Multi-Functions Device)> mem 0xff310000-0xff310fff on ofwbus0
+psci0: <ARM Power State Co-ordination Interface Driver> on ofwbus0
+smccc0: <ARM SMCCC v1.4> on psci0
+gic0: <ARM Generic Interrupt Controller v3.0> mem 0xfee00000-0xfee0ffff,0xfef00000-0xfefbffff,0xfff00000-0xfff0ffff,0xfff10000-0xfff1ffff,0xfff20000-0xfff2ffff irq 18 on ofwbus0
+its0: <ARM GIC Interrupt Translation Service> mem 0xfee20000-0xfee3ffff on gic0
+rk_pinctrl0: <RockChip Pinctrl controller> on ofwbus0
+gpio0: <RockChip GPIO Bank controller> mem 0xff720000-0xff7200ff irq 76 on rk_pinctrl0
+gpiobus0: <OFW GPIO bus> on gpio0
+gpio1: <RockChip GPIO Bank controller> mem 0xff730000-0xff7300ff irq 77 on rk_pinctrl0
+gpiobus1: <OFW GPIO bus> on gpio1
+gpio2: <RockChip GPIO Bank controller> mem 0xff780000-0xff7800ff irq 78 on rk_pinctrl0
+gpiobus2: <OFW GPIO bus> on gpio2
+gpio3: <RockChip GPIO Bank controller> mem 0xff788000-0xff7880ff irq 79 on rk_pinctrl0
+gpiobus3: <OFW GPIO bus> on gpio3
+gpio4: <RockChip GPIO Bank controller> mem 0xff790000-0xff7900ff irq 80 on rk_pinctrl0
+gpiobus4: <OFW GPIO bus> on gpio4
+rk_i2c0: <RockChip I2C> mem 0xff110000-0xff110fff irq 22 on ofwbus0
+iicbus0: <OFW I2C bus> on rk_i2c0
+rk_i2c1: <RockChip I2C> mem 0xff130000-0xff130fff irq 24 on ofwbus0
+iicbus1: <OFW I2C bus> on rk_i2c1
+rk_i2c2: <RockChip I2C> mem 0xff3c0000-0xff3c0fff irq 40 on ofwbus0
+iicbus2: <OFW I2C bus> on rk_i2c2
+rk808_pmu0: <RockChip RK808 PMIC> at addr 0x36 irq 81 on iicbus2
+fan53555_pmic0: <SYR827 PMIC> at addr 0x80 on iicbus2
+fan53555_pmic1: <SYR828 PMIC> at addr 0x82 on iicbus2
+rk_i2c3: <RockChip I2C> mem 0xff3d0000-0xff3d0fff irq 41 on ofwbus0
+iicbus3: <OFW I2C bus> on rk_i2c3
+rk_iodomain0: <RockChip IO Voltage Domain> mem 0xff320000-0xff320fff on rk_grf0
+rk_iodomain1: <RockChip IO Voltage Domain> mem 0-0xff76ffff,0-0xffff on rk_grf1
+generic_timer0: <ARMv8 Generic Timer> irq 2,3,4,5 on ofwbus0
+Timecounter "ARM MPCore Timecounter" frequency 24000000 Hz quality 1000
+Event timer "ARM MPCore Eventtimer" frequency 24000000 Hz quality 1000
+rk_tsadc0: <RockChip temperature sensors> mem 0xff260000-0xff2600ff irq 37 on ofwbus0
+mmc_pwrseq0: <MMC Simple Power sequence> on ofwbus0
+rk_usb2phy0: <Rockchip USB2PHY> mem 0-0xff76ffff,0-0xffff on rk_grf1
+rk_usb2phy1: <Rockchip USB2PHY> mem 0-0xff76ffff,0-0xffff on rk_grf1
+rk_emmcphy0: <Rockchip RK3399 eMMC PHY> mem 0-0xff76ffff,0-0xffff on rk_grf1
+rk_pcie_phy0: <Rockchip RK3399 PCIe PHY> mem 0-0xff76ffff,0-0xffff on rk_grf1
+rk_typec_phy0: <Rockchip RK3399 PHY TYPEC> mem 0xff7c0000-0xff7fffff on ofwbus0
+rk_typec_phy1: <Rockchip RK3399 PHY TYPEC> mem 0xff800000-0xff83ffff on ofwbus0
+smbios0: <System Management BIOS>
+smbios0: Entry point: v3 (64-bit), Version: 3.7
+cpulist0: <Open Firmware CPU Group> on ofwbus0
+cpu0: <Open Firmware CPU> on cpulist0
+cpufreq_dt0: <Generic cpufreq driver> on cpu0
+cpufreq_dt0: Found cpu-supply
+cpufreq0: <CPU frequency control> on cpu0
+cpufreq_dt1: <Generic cpufreq driver> on cpu1
+cpufreq_dt1: Found cpu-supply
+cpufreq1: <CPU frequency control> on cpu1
+cpufreq_dt2: <Generic cpufreq driver> on cpu2
+cpufreq_dt2: Found cpu-supply
+cpufreq2: <CPU frequency control> on cpu2
+cpufreq_dt3: <Generic cpufreq driver> on cpu3
+cpufreq_dt3: Found cpu-supply
+cpufreq3: <CPU frequency control> on cpu3
+cpufreq_dt4: <Generic cpufreq driver> on cpu4
+cpufreq_dt4: Found cpu-supply
+cpufreq4: <CPU frequency control> on cpu4
+cpufreq_dt5: <Generic cpufreq driver> on cpu5
+cpufreq_dt5: Found cpu-supply
+cpufreq5: <CPU frequency control> on cpu5
+pmu0: <Performance Monitoring Unit> irq 0 on ofwbus0
+pmu1: <Performance Monitoring Unit> irq 1 on ofwbus0
+pcib0: <Rockchip PCIe controller> mem 0xf8000000-0xf9ffffff,0xfd000000-0xfdffffff irq 6,7,8 on ofwbus0
+pcib0: Gen1 link training timeouted: 0x00080001.
+pci0: <OFW PCI bus> on pcib0
+pcib1: <PCI-PCI bridge> at device 0.0 on pci0
+pcib1: failed to allocate initial memory window: 0-0xfffff
+pci1: <PCI bus> on pcib1
+dwc0: <Rockchip Gigabit Ethernet Controller> mem 0xfe300000-0xfe30ffff irq 9 on ofwbus0
+miibus0: <MII bus> on dwc0
+rgephy0: <RTL8169S/8110S/8211 1000BASE-T media interface> PHY 0 on miibus0
+rgephy0:  none, 10baseT, 10baseT-FDX, 100baseTX, 100baseTX-FDX, 1000baseT-FDX, 1000baseT-FDX-master, auto
+rgephy1: <RTL8169S/8110S/8211 1000BASE-T media interface> PHY 1 on miibus0
+rgephy1:  none, 10baseT, 10baseT-FDX, 100baseTX, 100baseTX-FDX, 1000baseT-FDX, 1000baseT-FDX-master, auto
+dwc0: Ethernet address: 4a:75:6f:22:2f:6f
+rockchip_dwmmc0: <Synopsys DesignWare Mobile Storage Host Controller (RockChip)> mem 0xfe310000-0xfe313fff irq 10 on ofwbus0
+rockchip_dwmmc0: Hardware version ID is 270a
+rockchip_dwmmc0: Disabling HS200+ (tuning code not written)
+rockchip_dwmmc1: <Synopsys DesignWare Mobile Storage Host Controller (RockChip)> mem 0xfe320000-0xfe323fff irq 11 on ofwbus0
+rockchip_dwmmc1: Hardware version ID is 270a
+mmc0: <MMC/SD bus> on rockchip_dwmmc1
+rockchip_dwmmc1: Disabling HS200+ (tuning code not written)
+sdhci_rockchip0: <Rockchip RK3399 fdt SDHCI controller> mem 0xfe330000-0xfe33ffff irq 12 on ofwbus0
+rk_emmcphy0: got emmcclk clock
+sdhci_rockchip0-slot0: Hardware doesn't specify timeout clock frequency, setting BROKEN_TIMEOUT quirk.
+sdhci_rockchip0: 1 slot(s) allocated
+mmc1: <MMC/SD bus> on sdhci_rockchip0
+ehci0: <Generic EHCI Controller> mem 0xfe380000-0xfe39ffff irq 13 on ofwbus0
+usbus0: EHCI version 1.0
+usbus0 on ehci0
+ohci0: <Generic OHCI Controller> mem 0xfe3a0000-0xfe3bffff irq 14 on ofwbus0
+usbus1 on ohci0
+ehci1: <Generic EHCI Controller> mem 0xfe3c0000-0xfe3dffff irq 15 on ofwbus0
+usbus2: EHCI version 1.0
+usbus2 on ehci1
+ohci1: <Generic OHCI Controller> mem 0xfe3e0000-0xfe3fffff irq 16 on ofwbus0
+usbus3 on ohci1
+rk_dwc30: <Rockchip RK3399 DWC3> on ofwbus0
+snps_dwc3_fdt0: <Synopsys Designware DWC3> mem 0xfe800000-0xfe8fffff irq 84 on rk_dwc30
+snps_dwc3_fdt0: 64 bytes context size, 32-bit DMA
+snps_dwc3_fdt0: xECP capabilities <LEGACY,PROTO,PROTO,DEBUG>
+usbus4: trying to attach
+usbus4 on snps_dwc3_fdt0
+rk_dwc31: <Rockchip RK3399 DWC3> on ofwbus0
+snps_dwc3_fdt1: <Synopsys Designware DWC3> mem 0xfe900000-0xfe9fffff irq 85 on rk_dwc31
+snps_dwc3_fdt1: 64 bytes context size, 32-bit DMA
+snps_dwc3_fdt1: xECP capabilities <LEGACY,PROTO,PROTO,DEBUG>
+usbus5: trying to attach
+usbus5 on snps_dwc3_fdt1
+iicbus0: <unknown card> at addr 0x22
+iic0: <I2C generic I/O> on iicbus0
+iic1: <I2C generic I/O> on iicbus1
+uart0: <16750 or compatible> mem 0xff180000-0xff1800ff irq 28 on ofwbus0
+uart1: <16750 or compatible> mem 0xff1a0000-0xff1a00ff irq 30 on ofwbus0
+uart1: console (1500000,n,8,1)
+spi0: <Rockchip SPI> mem 0xff1d0000-0xff1d0fff irq 33 on ofwbus0
+spibus0: <OFW SPI bus> on spi0
+spibus0: <unknown card> at cs 0 mode 0
+spibus0: <unknown card> at cs 0 mode 0
+iic2: <I2C generic I/O> on iicbus2
+iicbus3: <unknown card> at addr 0x44
+iicbus3: <unknown card> at addr 0xba
+iic3: <I2C generic I/O> on iicbus3
+pwm0: <Rockchip PWM> mem 0xff420000-0xff42000f on ofwbus0
+pwmbus0: <OFW PWM bus> on pwm0
+pwmc0: <PWM Control> channel 0 on pwmbus0
+pwm1: <Rockchip PWM> mem 0xff420010-0xff42001f on ofwbus0
+pwmbus1: <OFW PWM bus> on pwm1
+pwmc1: <PWM Control> channel 0 on pwmbus1
+pwm2: <Rockchip PWM> mem 0xff420020-0xff42002f on ofwbus0
+pwmbus2: <OFW PWM bus> on pwm2
+pwmc2: <PWM Control> channel 0 on pwmbus2
+i2s0: <Rockchip I2S> mem 0xff880000-0xff880fff irq 58 on ofwbus0
+Cannot set frequency for clk: clkin_i2s, error: 34
+Cannot set frequency for clk: xin24m, error: 34
+i2s1: <Rockchip I2S> mem 0xff890000-0xff890fff irq 59 on ofwbus0
+Cannot set frequency for clk: clkin_i2s, error: 34
+Cannot set frequency for clk: xin24m, error: 34
+i2s2: <Rockchip I2S> mem 0xff8a0000-0xff8a0fff irq 60 on ofwbus0
+Cannot set frequency for clk: clkin_i2s, error: 34
+Cannot set frequency for clk: xin24m, error: 34
+pcm0: <simple-audio-card> on ofwbus0
+gpioc0: <GPIO controller> at pins 0-31 on gpiobus0
+gpioc1: <GPIO controller> at pins 0-31 on gpiobus1
+gpioc2: <GPIO controller> at pins 0-31 on gpiobus2
+gpioc3: <GPIO controller> at pins 0-31 on gpiobus3
+gpioc4: <GPIO controller> at pins 0-31 on gpiobus4
+gpioled0: <GPIO LEDs> on ofwbus0
+armv8crypto0: <AES-CBC,AES-XTS,AES-GCM>
+Timecounters tick every 1.000 msec
+rk808_pmu0: registered as a time-of-day clock, resolution 1.000000s
+usbus0: 480Mbps High Speed USB v2.0
+usbus1: 12Mbps Full Speed USB v1.0
+ugen0.1: <Generic EHCI root HUB> at usbus0
+uhub0 on usbus0
+uhub0: <Generic EHCI root HUB, class 9/0, rev 2.00/1.00, addr 1> on usbus0
+ugen1.1: <Generic OHCI root HUB> at usbus1
+uhub1 on usbus1
+uhub1: <Generic OHCI root HUB, class 9/0, rev 1.00/1.00, addr 1> on usbus1
+usbus2: 480Mbps High Speed USB v2.0
+usbus3: 12Mbps Full Speed USB v1.0
+ugen2.1: <Generic EHCI root HUB> at usbus2
+uhub2 on usbus2
+uhub2: <Generic EHCI root HUB, class 9/0, rev 2.00/1.00, addr 1> on usbus2
+ugen3.1: <Generic OHCI root HUB> at usbus3
+uhub3 on usbus3
+uhub3: <Generic OHCI root HUB, class 9/0, rev 1.00/1.00, addr 1> on usbus3
+usbus4: 5.0Gbps Super Speed USB v3.0
+usbus5: 5.0Gbps Super Speed USB v3.0
+ugen4.1: <Synopsys XHCI root HUB> at usbus4
+uhub4 on usbus4
+uhub4: <Synopsys XHCI root HUB, class 9/0, rev 3.00/1.00, addr 1> on usbus4
+ugen5.1: <Synopsys XHCI root HUB> at usbus5
+uhub5 on usbus5
+uhub5: <Synopsys XHCI root HUB, class 9/0, rev 3.00/1.00, addr 1> on usbus5
+uhub1: 1 port with 1 removable, self powered
+mmcsd0: 128GB <SDHC SD128 8.5 SN D8189E81 MFG 11/2021 by 3 SD> at mmc0 50.0MHz/4bit/1016-block
+uhub3: 1 port with 1 removable, self powered
+mmcsd1: 63GB <MMCHC C9A611 1.3 SN 8E2D3FF0 MFG 08/2025 by 214 0x0003> at mmc1 49.5MHz/8bit/65535-block
+mmcsd1boot0: 4MB partition 1 at mmcsd1
+mmcsd1boot1: 4MB partition 2 at mmcsd1
+mmcsd1rpmb: 17MB partition 3 at mmcsd1
+pcm0: no driver attached to codec node
+Trying to mount root from ufs:/dev/mmcsd0p2 [rw,noatime]...
+CPU  0: ARM Cortex-A53 r0p4 affinity:  0  0
+                   Cache Type = <64 byte CWG,64 byte ERG,64 byte D-cacheline,VIPT I-cache,64 byte I-cacheline>
+ Instruction Set Attributes 0 = <CRC32,SHA2,SHA1,AES+PMULL>
+ Instruction Set Attributes 1 = <>
+ Instruction Set Attributes 2 = <>
+         Processor Features 0 = <GIC,AdvSIMD,FP,EL3 32,EL2 32,EL1 32,EL0 32>
+         Processor Features 1 = <MTE_frac>
+         Processor Features 2 = <>
+      Memory Model Features 0 = <TGran4,TGran64,SNSMem,BigEnd,16bit ASID,1TB PA>
+      Memory Model Features 1 = <8bit VMID>
+      Memory Model Features 2 = <32bit CCIDX,48bit VA>
+      Memory Model Features 3 = <>
+      Memory Model Features 4 = <>
+             Debug Features 0 = <DoubleLock,2 CTX BKPTs,4 Watchpoints,6 Breakpoints,PMUv3,Debugv8>
+             Debug Features 1 = <>
+         Auxiliary Features 0 = <>
+         Auxiliary Features 1 = <>
+AArch32 Instruction Set Attributes 5 = <CRC32,SHA2,SHA1,AES+VMULL,SEVL>
+AArch32 Media and VFP Features 0 = <FPRound,FPSqrt,FPDivide,DP VFPv3+v4,SP VFPv3+v4,AdvSIMD>
+AArch32 Media and VFP Features 1 = <SIMDFMAC,FPHP DP Conv,SIMDHP SP Conv,SIMDSP,SIMDInt,SIMDLS,FPDNaN,FPFtZ>
+CPU  1: ARM Cortex-A53 r0p4 affinity:  0  1
+CPU  2: ARM Cortex-A53 r0p4 affinity:  0  2
+CPU  3: ARM Cortex-A53 r0p4 affinity:  0  3
+CPU  4: ARM Cortex-A72 r0p2 affinity:  1  0
+                   Cache Type = <64 byte CWG,64 byte ERG,64 byte D-cacheline,PIPT I-cache,64 byte I-cacheline>
+      Memory Model Features 0 = <TGran4,TGran64,SNSMem,BigEnd,16bit ASID,16TB PA>
+CPU  5: ARM Cortex-A72 r0p2 affinity:  1  1
+gic0: using for IPIs
+Release APs...done
+TCP_ratelimit: Is now initialized
+WARNING: / was not properly dismounted
+WARNING: /: mount pending error: blocks 48 files 2
+uhub5: 2 ports with 2 removable, self powered
+uhub4: 2 ports with 2 removable, self powered
+Warning: bad time from time-of-day clock, system time will not be set accurately
+uhub0: 1 port with 1 removable, self powered
+Dual Console: Serial Primary, Video Secondary
+uhub2: 1 port with 1 removable, self powered
+mx25l0: <M25Pxx Flash Family> at cs 0 mode 0 on spibus0
+mx25l0: device type gd25q128, size 16384K in 256 sectors of 64K, erase size 4K
+lo0: link state changed to UP
+dwc0: link state changed to DOWN
+dwc0: link state changed to UP
+rkfb: VOP mapped pa=0xff900000 va=0xffff0000a11f0000 size=0x10000
+rkfb: VOP[0x0000] = 0x00000000
+rkfb: VOP[0x0004] = 0x03058896
+rkfb: VOP[0x0008] = 0x20801800
+rkfb: VOP[0x0010] = 0x00000000
+rkfb: GRF mapped pa=0xff320000 va=0xffff0000a11e5000 size=0x8000
+rkfb: CRU mapped pa=0xff760000 va=0xffff0000a11ed000 size=0x1000
+rkfb: GRF[0x0000] = 0x00004000
+rkfb: GRF[0x0004] = 0x00000000
+rkfb: CRU[0x0000] = 0x00000032
+rkfb: CRU[0x0004] = 0x00001201
+rkfb: CRU[0x0008] = 0x8000031f
+rkfb: HDMI mapped pa=0xff940000 va=0xffff0000d6a00000 size=0x10000
+rkfb: HDMI design_id=0x21 rev=0x1a prod0=0xa0
+rkfb: HDMI PHY_CONF0  [0x3000] = 0x00
+rkfb: HDMI PHY_STAT0  [0x3004] = 0x00
+rkfb: HDMI IH_PHY     [0x0104] = 0x00
+rkfb: HDMI IH_MUTE    [0x01ff] = 0x00
+rkfb: HDMI VP_STATUS  [0x0800] = 0x01
+rkfb: HDMI MC_CLKDIS  [0x4001] = 0x00
+rkfb: HDMI MC_SWRSTZREQ [0x4002] = 0x00
+rkfb: loaded /dev/rkfb0 1280x720 32-bpp stride=5120 size=3686400 pa=0x48400000
+rkfb: PMU mapped pa=0xff310000
+rkfb: PMU_PWRDN_ST  [0x0098] = 0x0000000f
+rkfb: REG_WRITE VOP[0x0040] <= 0x12345678
+rkfb: REG_WRITE VOP[0x0040] <= 0x00000000
+rkfb: REG_WRITE VOP[0x0040] <= 0x48400000
+rkfb: REG_WRITE VOP[0x003c] <= 0x05000500
+rkfb: REG_WRITE VOP[0x0048] <= 0x02cf04ff
+rkfb: REG_WRITE VOP[0x004c] <= 0x02cf04ff
+rkfb: REG_WRITE VOP[0x0050] <= 0x00000000
+rkfb: REG_WRITE VOP[0x0030] <= 0x00000011
+rkfb: REG_WRITE VOP[0x0000] <= 0x00000001
+ugen5.2: <vendor 0x3938 Multi-Device Keyboard and Mouse> at usbus5
+usbhid0 on uhub5
+usbhid0: <vendor 0x3938 Multi-Device Keyboard and Mouse, class 0/0, rev 2.00/2.00, addr 1> on usbus5
+hidbus0: <HID bus> on usbhid0
+hkbd0: <vendor 0x3938 Multi-Device Keyboard and Mouse> on hidbus0
+kbd1 at hkbd0
+usbhid1 on uhub5
+usbhid1: <vendor 0x3938 Multi-Device Keyboard and Mouse, class 0/0, rev 2.00/2.00, addr 1> on usbus5
+hidbus1: <HID bus> on usbhid1
+hms0: <vendor 0x3938 Multi-Device Keyboard and Mouse> on hidbus1
+hms0: 8 buttons and [XYWH] coordinates ID=2
+hcons0: <vendor 0x3938 Multi-Device Keyboard and Mouse Consumer Control> on hidbus1
+hsctrl0: <vendor 0x3938 Multi-Device Keyboard and Mouse System Control> on hidbus1
+rkfb: REG_WRITE VOP[0x0040] <= 0x12345678
+rkfb: REG_WRITE VOP[0x0040] <= 0x00000000
+rkfb: REG_WRITE VOP[0x0040] <= 0x48400000
+rkfb: REG_WRITE VOP[0x003c] <= 0x05000500
+rkfb: REG_WRITE VOP[0x0048] <= 0x02cf04ff
+rkfb: REG_WRITE VOP[0x004c] <= 0x02cf04ff
+rkfb: REG_WRITE VOP[0x0050] <= 0x00000000
+rkfb: REG_WRITE VOP[0x0030] <= 0x00000011
+rkfb: REG_WRITE VOP[0x0000] <= 0x00000001
+rkfb: REG_WRITE VOP[0x0040] <= 0x12345678
+rkfb: REG_WRITE VOP[0x0040] <= 0x00000000
+rkfb: REG_WRITE VOP[0x0040] <= 0x48400000
+rkfb: REG_WRITE VOP[0x003c] <= 0x05000500
+rkfb: REG_WRITE VOP[0x0048] <= 0x02cf04ff
+rkfb: REG_WRITE VOP[0x004c] <= 0x02cf04ff
+rkfb: REG_WRITE VOP[0x0050] <= 0x00000000
+rkfb: REG_WRITE VOP[0x0030] <= 0x00000011
+rkfb: REG_WRITE VOP[0x0000] <= 0x00000001

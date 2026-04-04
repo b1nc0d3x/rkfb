@@ -1,0 +1,104 @@
+--- HDMI ID ---
+design_id  [0x0000] = 0x21
+revision   [0x0004] = 0x1a
+product0   [0x0008] = 0xa0
+product1   [0x000c] = 0xc1
+config0    [0x0010] = 0xbf
+config1    [0x0014] = 0x62
+config2    [0x0018] = 0xf3
+
+--- HDMI Interrupts ---
+IH_PHY_STAT0    [0x0104] = 0x00
+IH_MUTE_PHY     [0x0184] = 0x00
+IH_MUTE         [0x01ff] = 0x00
+
+--- HDMI PHY ---
+PHY_CONF0       [0x3000] = 0x00
+PHY_TST0        [0x3001] = 0x00
+PHY_STAT0       [0x3004] = 0x00
+PHY_I2CM_SLAVE  [0x3020] = 0x00
+PHY_I2CM_ADDR   [0x3021] = 0x00
+PHY_I2CM_OP     [0x3026] = 0x00
+PHY_I2CM_INT    [0x3027] = 0x00
+PHY_I2CM_CTLINT [0x3028] = 0x00
+PHY_I2CM_DIV    [0x3029] = 0x00
+
+--- Frame Composer ---
+FC_INVIDCONF    [0x1000] = 0x00
+FC_INHACTV0     [0x1001] = 0x00
+FC_INHACTV1     [0x1002] = 0x00
+FC_INHBLANK0    [0x1003] = 0x00
+FC_INHBLANK1    [0x1004] = 0x00
+FC_INVACTV0     [0x1005] = 0x00
+FC_INVACTV1     [0x1006] = 0x00
+FC_INVBLANK     [0x1007] = 0x00
+FC_HSYNCINDELAY0[0x1008] = 0x00
+FC_HSYNCINDELAY1[0x1009] = 0x00
+FC_HSYNCINWIDTH0[0x100a] = 0x00
+FC_HSYNCINWIDTH1[0x100b] = 0x00
+FC_VSYNCINDELAY [0x100c] = 0x00
+FC_VSYNCINWIDTH [0x100d] = 0x00
+FC_INFREQ0      [0x100e] = 0x00
+FC_INFREQ1      [0x100f] = 0x00
+FC_INFREQ2      [0x1010] = 0x00
+FC_AVICONF0     [0x1017] = 0x00
+FC_AVICONF1     [0x1018] = 0x00
+FC_AVICONF2     [0x1019] = 0x00
+FC_AVIVID       [0x101b] = 0x00
+
+--- Video Packetizer ---
+VP_STATUS       [0x0800] = 0x01
+VP_PR_CD        [0x0801] = 0x00
+VP_STUFF        [0x0802] = 0x00
+VP_REMAP        [0x0803] = 0x00
+VP_CONF         [0x0804] = 0x07
+
+--- Main Controller ---
+MC_CLKDIS       [0x4001] = 0x00
+MC_SWRSTZREQ    [0x4002] = 0x00
+MC_OPCTRL       [0x4003] = 0x00
+MC_FLOWCTRL     [0x4004] = 0x00
+
+--- VOP WIN0 ---
+SYS_CTRL        [0x0008] = 0x20821800
+DSP_CTRL0       [0x0010] = 0x00000000
+WIN0_CTRL0      [0x0030] = 0x00000011
+WIN0_VIR        [0x003c] = 0x05000500
+WIN0_YRGB_MST   [0x0040] = 0x48400000
+WIN0_CBR_MST    [0x0044] = 0x00000000
+WIN0_ACT_INFO   [0x0048] = 0x02cf04ff
+WIN0_DSP_INFO   [0x004c] = 0x02cf04ff
+WIN0_DSP_ST     [0x0050] = 0x00000000
+
+--- CRU ---
+CLKSEL49        [0x00c4] = 0x00002608
+CLKGATE16       [0x0240] = 0x00000000
+CLKGATE17       [0x0244] = 0x00000000
+CLKGATE18       [0x0248] = 0x00000000
+CLKGATE19       [0x024c] = 0x00000000
+CLKGATE20       [0x0250] = 0x00000000
+CLKGATE21       [0x0254] = 0x00000000
+CLKGATE22       [0x0258] = 0x00000000
+
+--- GRF ---
+SOC_STATUS5     [0x04e8] = 0x00000000
+
+--- VOP write test ---
+WIN0_YRGB_MST before = 0x48400000
+WIN0_YRGB_MST after  = 0x48400000
+
+--- VOP WIN0 scanout setup ---
+
+--- FB Info ---
+fb_pa  = 0x0000000048400000
+width  = 1280
+height = 720
+stride = 5120
+
+--- VOP WIN0 scanout setup ---
+fb_pa32 = 0x48400000
+vir     = 0x05000500
+act     = 0x02cf04ff
+Scanout programmed. Check display.
+WIN0_CTRL0    = 0x00000011
+WIN0_YRGB_MST = 0x48400000
