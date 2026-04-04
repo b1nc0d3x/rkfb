@@ -195,6 +195,12 @@ main(void)
         printf("\n--- GRF ---\n");
         printf("SOC_STATUS5     [0x04e8] = 0x%08x\n", grf_read(0x04e8));
 
+        printf("\n--- VOP write test ---\n");
+	printf("WIN0_YRGB_MST before = 0x%08x\n", vop_read(0x0040));
+	vop_write(0x0040, 0x12345678);
+	printf("WIN0_YRGB_MST after  = 0x%08x\n", vop_read(0x0040));
+	vop_write(0x0040, 0x00000000);  /* restore */
+	
         close(g_fd);
         return (0);
 }
