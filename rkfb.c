@@ -1,3 +1,4 @@
+
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
@@ -95,7 +96,7 @@ struct vt_device {
   /* pad to avoid touching beyond vd_softc */
 };
 
-extern struct vt_device vt_consdev;
+
 
 
 static struct rkfb_softc g_rkfb_sc;
@@ -857,33 +858,6 @@ rkfb_modevent(module_t mod, int type, void *data)
 		printf("rkfb: PMU_PWRDN_ST  [0x0098] = 0x%08x\n",
 		    rkfb_pmu_read4(sc, 0x0098));
                 
-		
-
-		/* Read efifb address from vt_consdev */
-		/* Read vd_softc from vt_consdev at correct offset */
-		extern char vt_consdev;  /* treat as raw bytes */
-
-		void *vd_softc;
-		struct fb_info *fbi;
-
-		memcpy(&vd_softc, &vt_consdev + 144, sizeof(void *));
-		fbi = (struct fb_info *)vd_softc;
-
-		if (fbi != NULL) {
-		  printf("rkfb: efifb pbase  = 0x%016lx\n",
-			 (unsigned long)fbi->fb_pbase);
-		  printf("rkfb: efifb size   = 0x%08x\n",
-			 fbi->fb_size);
-		  printf("rkfb: efifb width  = %u\n",
-			 fbi->fb_width);
-		  printf("rkfb: efifb height = %u\n",
-			 fbi->fb_height);
-		  printf("rkfb: efifb stride = %u\n",
-			 fbi->fb_stride);
-		} else {
-		  printf("rkfb: vd_softc is NULL\n");
-		}
-
 		break;
 
         case MOD_UNLOAD:
