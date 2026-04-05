@@ -41,7 +41,8 @@
 #define CRU_SIZE        0x1000
 #define GRF_PA          0xff320000UL
 #define GRF_SIZE        0x8000
-
+#define VIOGRF_PA   0xff770000UL
+#define VIOGRF_SIZE 0x1000
 /* -------------------------------------------------------------------------
  * /dev/mem mapped regions
  * ---------------------------------------------------------------------- */
@@ -171,14 +172,25 @@ step1_reset_release(void)
  * Step 2: GRF mux — VOPB -> HDMI
  * ---------------------------------------------------------------------- */
 
+static volatile uint32_t *g_viogrf;
+
+static inline uint32_t viogrf_r(uint32_t off) { return g_viogrf[off/4]; }
+static inline void viogrf_hiword(uint32_t off, uint32_t mask, uint32_t val)
+{
+        g_viogrf[off/4] = (mask << 16) | (val & mask);
+}
+
 static void
 step2_grf_mux(void)
 {
-        printf("\n[2] GRF mux: VOPB -> HDMI...\n");
-        printf("    GRF_SOC_CON4 before: 0x%08x\n", grf_r(0x0410));
-        grf_hiword(0x0410, (3 << 8), (1 << 8));
+        printf("\n[2] GRF mux: VOPB -> HDMI (VIO GRF)...\n");
+        printf("    VIO GRF SOC_CON20 before: 0x%08x\n", viogrf_r(0x0250));
+
+        /* RK3399_HDMI_LCDC_SEL bit6: 1=VOPB, 0=VOPL */
+        viogrf_hiword(0x0250, (1<<6), (1<<6));
         usleep(1000);
-        printf("    GRF_SOC_CON4 after:  0x%08x\n", grf_r(0x0410));
+
+        printf("    VIO GRF SOC_CON20 after:  0x%08x\n", viogrf_r(0x0250));
 }
 
 /* -------------------------------------------------------------------------
@@ -266,7 +278,7 @@ step5_phy(void)
         hdmi_w(0x302d, 0x00);
         hdmi_w(0x302e, 0x18);
 
-        hdmi_w(0x3000, 0x42);   /* PHY_CONF0: ENTMDS, keep PDZ=0 */
+        hdmi_w(0x3000, 0xc2);   /* PHY_CONF0: ENTMDS, keep PDZ=0 */
         usleep(5000);
 
         phy_i2c_write(0x06, 0x0008);
@@ -343,7 +355,44 @@ step7_report(void)
         else
                 printf("  >> No lock, no HPD — check cable and init sequence\n");
 }
+//##############################   VPLL   ###############################
 
+static void
+step0b_vpll()
+{
+        printf("\n[0b] Configuring VPLL for 74.25 MHz...\n");
+        printf("     VPLL_CON3 before: 0x%08x\n", cru_r(0x002c));
+
+        /* Power down */
+        cru_w(0x002c, (1<<20) | (1<<3));
+        usleep(1000);
+
+        /* FBDIV=99 */
+        cru_w(0x0020, (0xfff << 16) | 0x0063);
+        /* POSTDIV2=8, POSTDIV1=4, REFDIV=1 */
+        cru_w(0x0024, (0xffff << 16) | (8<<12) | (4<<8) | 1);
+        /* FRACDIV=0 */
+        cru_w(0x0028, 0x00000000);
+        /* Power up */
+        cru_w(0x002c, (0xff << 16) | 0x00);
+        usleep(1000);
+
+        /* Wait for lock — CON2 bit31 */
+        int i;
+        for (i = 0; i < 100; i++) {
+                usleep(1000);
+                if (cru_r(0x0028) & (1u << 31)) {
+                        printf("     VPLL locked after %d ms\n", i+1);
+                        break;
+                }
+        }
+        if (i == 100) printf("     VPLL lock TIMEOUT\n");
+
+        /* Route VPLL to HDMI pixel clock via CLKSEL49 */
+        /* CLKSEL49 [0x00c4]: bits[9:8]=clock source, 10=VPLL */
+        cru_hiword(0x00c4, (3<<8), (2<<8));
+        printf("     CLKSEL49 after: 0x%08x\n", cru_r(0x00c4));
+}
 /* -------------------------------------------------------------------------
  * main
  * ---------------------------------------------------------------------- */
@@ -377,6 +426,11 @@ main(void)
         if (g_grf == MAP_FAILED)
                 err(1, "mmap GRF");
 
+	g_viogrf = mmap(NULL, VIOGRF_SIZE, PROT_READ|PROT_WRITE,
+    MAP_SHARED, g_memfd, VIOGRF_PA);
+if (g_viogrf == MAP_FAILED)
+    err(1, "mmap VIO GRF");
+
         /* Open /dev/rkfb0 for VOP access */
         g_rkfb = open("/dev/rkfb0", O_RDWR);
         if (g_rkfb < 0)
@@ -396,7 +450,8 @@ main(void)
         printf("Framebuffer filled with blue.\n");
 
         step0_clocks();
-        step1_reset_release();
+        step0b_vpll();
+	step1_reset_release();
         step2_grf_mux();
         step3_vop((uint32_t)(info.fb_pa & 0xffffffff));
         step4_fc_720p60();
