@@ -524,23 +524,33 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                 return (0);
         }
 
-        /* ---- VOP raw write ---------------------------------------------- */
+        /* ---- raw register write (multi-block) ----------------------------- */
         case RKFB_REG_WRITE: {
                 struct rkfb_regop *ro = (struct rkfb_regop *)data;
 
-                if (ro->block != 0)
-                        return (EPERM);
                 if ((ro->off & 0x3) != 0)
                         return (EINVAL);
-                if (ro->off >= sc->vop_size)
-                        return (EINVAL);
-                if (!rkfb_vop_write_allowed(ro->off))
-                        return (EPERM);
 
-                printf("rkfb: REG_WRITE VOP[0x%04x] <= 0x%08x\n",
-                    ro->off, ro->val);
-                rkfb_vop_write4(sc, ro->off, ro->val);
-                return (0);
+                switch (ro->block) {
+                case 0: /* VOP — allowlist enforced */
+                        if (ro->off >= sc->vop_size)
+                                return (EINVAL);
+                        if (!rkfb_vop_write_allowed(ro->off))
+                                return (EPERM);
+                        printf("rkfb: REG_WRITE VOP[0x%04x] <= 0x%08x\n",
+                            ro->off, ro->val);
+                        rkfb_vop_write4(sc, ro->off, ro->val);
+                        return (0);
+                case 4: /* TZPC — 32-bit aligned */
+                        if (ro->off >= sc->tzpc_size)
+                                return (EINVAL);
+                        printf("rkfb: REG_WRITE TZPC[0x%04x] <= 0x%08x\n",
+                            ro->off, ro->val);
+                        rkfb_tzpc_write4(sc, ro->off, ro->val);
+                        return (0);
+                default:
+                        return (EPERM);
+                }
         }
 
         /* ---- VOP range dump --------------------------------------------- */
