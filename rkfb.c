@@ -13,6 +13,7 @@
  *   GRF     0xff320000  0x8000    32-bit registers (expanded from 0x1000)
  *   CRU     0xff760000  0x1000    32-bit registers
  *   HDMI    0xff940000  0x10000   byte-wide registers (DW-HDMI)
+ *   TZPC    0xff330000  0x1000    32-bit registers
  */
 
 #include <sys/param.h>
@@ -84,6 +85,11 @@ struct rkfb_softc {
        vm_offset_t     pmu_va;
        vm_paddr_t      pmu_pa;
        size_t          pmu_size;
+
+        /* TZPC */
+        vm_offset_t     tzpc_va;
+        vm_paddr_t      tzpc_pa;
+        size_t          tzpc_size;
   
         struct mtx      mtx;
 };
@@ -190,6 +196,26 @@ rkfb_cru_write4(struct rkfb_softc *sc, size_t off, uint32_t val)
 {
         volatile uint32_t *reg;
         reg = (volatile uint32_t *)(sc->cru_va + off);
+        *reg = val;
+}
+
+/* -------------------------------------------------------------------------
+ * TZPC accessors (32-bit)
+ * ---------------------------------------------------------------------- */
+
+static inline uint32_t
+rkfb_tzpc_read4(struct rkfb_softc *sc, size_t off)
+{
+        volatile uint32_t *reg;
+        reg = (volatile uint32_t *)(sc->tzpc_va + off);
+        return (*reg);
+}
+
+static inline void
+rkfb_tzpc_write4(struct rkfb_softc *sc, size_t off, uint32_t val)
+{
+        volatile uint32_t *reg;
+        reg = (volatile uint32_t *)(sc->tzpc_va + off);
         *reg = val;
 }
 
@@ -454,6 +480,13 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                         if (ro->off >= sc->hdmi_size)
                                 return (EINVAL);
                         ro->val = rkfb_hdmi_read1(sc, ro->off);
+                        return (0);
+                case 4: /* TZPC — 32-bit aligned */
+                        if ((ro->off & 0x3) != 0)
+                                return (EINVAL);
+                        if (ro->off >= sc->tzpc_size)
+                                return (EINVAL);
+                        ro->val = rkfb_tzpc_read4(sc, ro->off);
                         return (0);
                 default:
                         return (EINVAL);
@@ -857,7 +890,28 @@ rkfb_modevent(module_t mod, int type, void *data)
 		/* PMU power domain status */
 		printf("rkfb: PMU_PWRDN_ST  [0x0098] = 0x%08x\n",
 		    rkfb_pmu_read4(sc, 0x0098));
-                
+
+                /* Map TZPC */
+                sc->tzpc_pa   = 0xff330000;
+                sc->tzpc_size = 0x1000;
+                sc->tzpc_va   = (vm_offset_t)pmap_mapdev(sc->tzpc_pa,
+                    sc->tzpc_size);
+                if (sc->tzpc_va == 0) {
+                        printf("rkfb: failed to map TZPC\n");
+                        pmap_unmapdev((void *)sc->pmu_va, sc->pmu_size);
+                        pmap_unmapdev((void *)sc->hdmi_va, sc->hdmi_size);
+                        pmap_unmapdev((void *)sc->cru_va,  sc->cru_size);
+                        pmap_unmapdev((void *)sc->grf_va,  sc->grf_size);
+                        pmap_unmapdev((void *)sc->vop_va,  sc->vop_size);
+                        kmem_free((void *)sc->fb_va,
+                            round_page(sc->fb_size));
+                        mtx_destroy(&sc->mtx);
+                        return (ENXIO);
+                }
+                printf("rkfb: TZPC mapped pa=0x%jx va=0x%jx size=0x%zx\n",
+                    (uintmax_t)sc->tzpc_pa, (uintmax_t)sc->tzpc_va,
+                    sc->tzpc_size);
+
 		break;
 
         case MOD_UNLOAD:
@@ -874,6 +928,8 @@ rkfb_modevent(module_t mod, int type, void *data)
                         pmap_unmapdev((void *)sc->grf_va, sc->grf_size);
                 if (sc->vop_va != 0)
                         pmap_unmapdev((void *)sc->vop_va, sc->vop_size);
+                if (sc->tzpc_va != 0)
+                        pmap_unmapdev((void *)sc->tzpc_va, sc->tzpc_size);
                 mtx_destroy(&sc->mtx);
                 printf("rkfb: unloaded\n");
                 break;
