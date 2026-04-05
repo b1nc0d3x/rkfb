@@ -197,6 +197,8 @@ rkfb_cru_write4(struct rkfb_softc *sc, size_t off, uint32_t val)
         volatile uint32_t *reg;
         reg = (volatile uint32_t *)(sc->cru_va + off);
         *reg = val;
+        __asm volatile("dsb sy" ::: "memory");
+        __asm volatile("isb" ::: "memory");
 }
 
 /* -------------------------------------------------------------------------
@@ -217,6 +219,8 @@ rkfb_tzpc_write4(struct rkfb_softc *sc, size_t off, uint32_t val)
         volatile uint32_t *reg;
         reg = (volatile uint32_t *)(sc->tzpc_va + off);
         *reg = val;
+        __asm volatile("dsb sy" ::: "memory");
+        __asm volatile("isb" ::: "memory");
 }
 
 /* -------------------------------------------------------------------------
@@ -237,6 +241,8 @@ rkfb_hdmi_write1(struct rkfb_softc *sc, size_t off, uint8_t val)
         volatile uint8_t *reg;
         reg = (volatile uint8_t *)(sc->hdmi_va + off);
         *reg = val;
+        __asm volatile("dsb sy" ::: "memory");
+        __asm volatile("isb" ::: "memory");
 }
 
 
@@ -540,6 +546,20 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                         printf("rkfb: REG_WRITE VOP[0x%04x] <= 0x%08x\n",
                             ro->off, ro->val);
                         rkfb_vop_write4(sc, ro->off, ro->val);
+                        return (0);
+                case 1: /* GRF */
+                        if (ro->off >= sc->grf_size)
+                                return (EINVAL);
+                        printf("rkfb: REG_WRITE GRF[0x%04x] <= 0x%08x\n",
+                            ro->off, ro->val);
+                        rkfb_grf_write4(sc, ro->off, ro->val);
+                        return (0);
+                case 2: /* CRU */
+                        if (ro->off >= sc->cru_size)
+                                return (EINVAL);
+                        printf("rkfb: REG_WRITE CRU[0x%04x] <= 0x%08x\n",
+                            ro->off, ro->val);
+                        rkfb_cru_write4(sc, ro->off, ro->val);
                         return (0);
                 case 4: /* TZPC — 32-bit aligned */
                         if (ro->off >= sc->tzpc_size)
@@ -898,11 +918,11 @@ rkfb_modevent(module_t mod, int type, void *data)
 		printf("rkfb: PMU mapped pa=0x%jx\n", (uintmax_t)sc->pmu_pa);
 
 		/* PMU power domain status */
-		printf("rkfb: PMU_PWRDN_ST  [0x0098] = 0x%08x\n",
-		    rkfb_pmu_read4(sc, 0x0098));
+		printf("rkfb: PMU_PWRDN_ST  [0x0018] = 0x%08x\n",
+		    rkfb_pmu_read4(sc, 0x0018));
 
                 /* Map TZPC */
-                sc->tzpc_pa   = 0xff330000;
+                sc->tzpc_pa   = 0xff740000;
                 sc->tzpc_size = 0x1000;
                 sc->tzpc_va   = (vm_offset_t)pmap_mapdev(sc->tzpc_pa,
                     sc->tzpc_size);
@@ -922,6 +942,24 @@ rkfb_modevent(module_t mod, int type, void *data)
                     (uintmax_t)sc->tzpc_pa, (uintmax_t)sc->tzpc_va,
                     sc->tzpc_size);
 
+                /*
+                 * TZPC register dump.
+                 * TZPC_R0SIZE      [0x0004]: SRAM pages secured
+                 * TZPCDECPROT0_ST  [0x0800]: peripheral protection group 0
+                 * TZPCDECPROT1_ST  [0x0810]: peripheral protection group 1
+                 * TZPCDECPROT2_ST  [0x0820]: peripheral protection group 2
+                 * A set bit means the peripheral is TrustZone-secured
+                 * (non-secure access will be denied = SError).
+                 */
+                printf("rkfb: TZPC R0SIZE      [0x0004] = 0x%08x\n",
+                    rkfb_tzpc_read4(sc, 0x0004));
+                printf("rkfb: TZPC DECPROT0_ST [0x0800] = 0x%08x\n",
+                    rkfb_tzpc_read4(sc, 0x0800));
+                printf("rkfb: TZPC DECPROT1_ST [0x0810] = 0x%08x\n",
+                    rkfb_tzpc_read4(sc, 0x0810));
+                printf("rkfb: TZPC DECPROT2_ST [0x0820] = 0x%08x\n",
+                    rkfb_tzpc_read4(sc, 0x0820));
+
 		break;
 
         case MOD_UNLOAD:
@@ -938,6 +976,8 @@ rkfb_modevent(module_t mod, int type, void *data)
                         pmap_unmapdev((void *)sc->grf_va, sc->grf_size);
                 if (sc->vop_va != 0)
                         pmap_unmapdev((void *)sc->vop_va, sc->vop_size);
+                if (sc->pmu_va != 0)
+                        pmap_unmapdev((void *)sc->pmu_va, sc->pmu_size);
                 if (sc->tzpc_va != 0)
                         pmap_unmapdev((void *)sc->tzpc_va, sc->tzpc_size);
                 mtx_destroy(&sc->mtx);
