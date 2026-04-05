@@ -5,6 +5,10 @@
 #include <sys/types.h>
 
 #define RKFB_IOCTL_BASE   'R'
+#define RKFB_BLOCK_VOP    0
+#define RKFB_BLOCK_GRF    1
+#define RKFB_BLOCK_CRU    2
+#define RKFB_BLOCK_HDMI   3
 
 struct rkfb_info {
 	uint32_t width;
