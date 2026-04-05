@@ -267,46 +267,53 @@ step4_fc_720p60(void)
 static void
 step5_phy(void)
 {
-        uint8_t stat;
-        int timeout;
+  printf("\n[5] PHY init for 74.25 MHz (720p60)...\n");
 
-        printf("\n[5] Innosilicon PHY init (74.25 MHz)...\n");
+  /* Release PHY reset */
+  hdmi_w(0x4005, 0x00);   /* MC_PHYRSTZ: assert reset */
+  usleep(1000);
+  hdmi_w(0x4005, 0x01);   /* MC_PHYRSTZ: release reset */
+  usleep(5000);
 
-        hdmi_w(0x3029, 0x17);   /* PHY_I2CM_DIV */
-        hdmi_w(0x302b, 0x00);
-        hdmi_w(0x302c, 0x18);
-        hdmi_w(0x302d, 0x00);
-        hdmi_w(0x302e, 0x18);
+  /* MPLL config for 74.25 MHz from rockchip_mpll_cfg */
+  /* opmode=0, fbdiv2=x, fbdiv1=x */
+  hdmi_w(0x3000, 0x00);   /* PHY_CONF0: clear */
+  hdmi_w(0x3001, 0x00);   /* PHY_TST0 */
 
-        hdmi_w(0x3000, 0xc2);   /* PHY_CONF0: ENTMDS, keep PDZ=0 */
-        usleep(5000);
+  /* Write PHY config via Gen2 PHY interface */
+  /* PHY_CKSYMTXCTRL = 0x8009 */
+  hdmi_w(0x3006, 0x09);   /* low byte */
+  hdmi_w(0x3007, 0x80);   /* high byte */
 
-        phy_i2c_write(0x06, 0x0008);
-        phy_i2c_write(0x15, 0x0000);
-        phy_i2c_write(0x10, 0x01b5);
-        phy_i2c_write(0x09, 0x0091);
-        phy_i2c_write(0x0e, 0x0000);
-        phy_i2c_write(0x19, 0x0000);
+  /* PHY_TXTERM = 0x0004 */
+  hdmi_w(0x3004, 0x04);
+  hdmi_w(0x3005, 0x00);
 
-        hdmi_w(0x3000, 0xca);   /* PHY_CONF0: power up */
-        usleep(5000);
+  /* PHY_VLEVCTRL = 0x0272 */
+  hdmi_w(0x3008, 0x72);
+  hdmi_w(0x3009, 0x02);
 
-        printf("    PHY_CONF0: 0x%02x\n", hdmi_r(0x3000));
-        printf("    Waiting for PLL lock...\n");
+  /* Enable PHY: PDZ|ENTMDS|GEN2_TXPWRON|SELDATAENPOL */
+  hdmi_w(0x3000, 0xca);
+  usleep(10000);
 
-        for (timeout = 30; timeout > 0; timeout--) {
-                usleep(5000);
-                stat = hdmi_r(0x3004);
-                if (stat & 0x10) {
-                        printf("    PHY locked! PHY_STAT0=0x%02x HPD=%d\n",
-                            stat, (stat >> 1) & 1);
-                        break;
-                }
-        }
-        if (timeout == 0)
-                printf("    PHY lock TIMEOUT. PHY_STAT0=0x%02x\n",
-                    hdmi_r(0x3004));
+  printf("    PHY_CONF0: 0x%02x\n", hdmi_r(0x3000));
+  printf("    PHY_STAT0: 0x%02x\n", hdmi_r(0x3004));
+
+  /* Wait for lock */
+  int i;
+  for (i = 0; i < 30; i++) {
+    usleep(5000);
+    uint8_t stat = hdmi_r(0x3004);
+    if (stat & 0x10) {
+      printf("    PHY locked! PHY_STAT0=0x%02x HPD=%d\n",
+	     stat, (stat >> 1) & 1);
+      return;
+    }
+  }
+  printf("    PHY lock TIMEOUT. PHY_STAT0=0x%02x\n", hdmi_r(0x3004));
 }
+
 
 /* -------------------------------------------------------------------------
  * Step 6: VOP commit
