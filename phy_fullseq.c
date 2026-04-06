@@ -104,57 +104,19 @@ main(void)
 	if (g_viogrf==MAP_FAILED) err(1,"mmap VIO GRF");
 	if (g_vop==MAP_FAILED)    err(1,"mmap VOP");
 
-	/* ---- 0a: VPLL -> 74.25 MHz ------------------------------------ */
-	printf("[0a] VPLL -> 74.25 MHz (FBDIV=99,REFDIV=2,PD1=4,PD2=4)...\n");
-	printf("     CON0-3 before: %08x %08x %08x %08x\n",
-	    cru_r(0x20),cru_r(0x24),cru_r(0x28),cru_r(0x2c));
-
+	/* ---- 0a: CLKSEL49 = GPLL/8 = 74.25 MHz ----------------------- */
 	/*
-	 * Power down: CON3 bit0=PWRDOWN. Hiword: mask=1, val=1.
-	 * Also set DSMPD (integer mode) in CON1 bit15 while we're at it.
+	 * GPLL = 594 MHz, kernel-stable, never reprogrammed.
+	 * 594 / 8 = 74.25 MHz exactly. No PLL config needed.
+	 * CLKSEL49: bits[9:8]=01(GPLL), bits[7:0]=0x07(div=8) -> 0x107
 	 */
-	cru_hiword(0x2c, 0x0001u, 0x0001u);     /* PWRDOWN=1 */
-	usleep(1000);
+	printf("[0a] CLKSEL49: GPLL/8 = 74.25 MHz...\n");
+	printf("     GPLL CON2 = 0x%08x (locked=%d)\n",
+	    cru_r(0x0088), (cru_r(0x0088)>>31)&1);
+	printf("     CLKSEL49 before: 0x%08x\n", cru_r(0x00c4));
+	cru_hiword(0x00c4, (3u<<8)|0xffu, (1u<<8)|0x07u);
+	printf("     CLKSEL49 after:  0x%08x  (want bits[9:0]=0x107)\n", cru_r(0x00c4));
 
-	/*
-	 * CON0: mask=0x7fff (bits 14:0), val=(POSTDIV1=4)<<12 | FBDIV=99
-	 *       = 0x4063
-	 * CON1: mask=0xffff, val=DSMPD(1)<<15 | (POSTDIV2=4)<<12 | REFDIV=2
-	 *       = 0xc002
-	 * CON2: FRACDIV=0, written directly (no hiword for this field)
-	 *       but we still need hiword format since CRU always uses it:
-	 *       write 0x00ff0000 to clear upper fracdiv bits, val=0
-	 *       Actually CON2[23:0]=FRACDIV, CON2[31]=LOCK(RO). Write 0.
-	 */
-	cru_hiword(0x20, 0x7fffu, 0x4063u);     /* POSTDIV1=4, FBDIV=99 */
-	cru_hiword(0x24, 0xffffu, 0xc002u);     /* DSMPD=1, POSTDIV2=4, REFDIV=2 */
-	cru_w(0x28, 0x00000000u);              /* FRACDIV=0 (direct, lock bit RO) */
-
-	/* Power up: CON3 bit0=0 */
-	cru_hiword(0x2c, 0x0001u, 0x0000u);     /* PWRDOWN=0 */
-	usleep(1000);
-
-	printf("     CON0-3 written: %08x %08x %08x %08x\n",
-	    cru_r(0x20),cru_r(0x24),cru_r(0x28),cru_r(0x2c));
-	printf("     (CON0 should be 0x????4063, CON1 0x????c002)\n");
-
-	/* Wait for lock: CON2 bit31 */
-	for (i=0; i<100; i++) {
-		usleep(1000);
-		if (cru_r(0x28) & (1u<<31)) {
-			printf("     VPLL locked after %d ms\n", i+1);
-			break;
-		}
-	}
-	if (i==100)
-		printf("     VPLL TIMEOUT  CON2=0x%08x (lock=bit31)\n", cru_r(0x28));
-	printf("     CON0-3 final:  %08x %08x %08x %08x\n",
-	    cru_r(0x20),cru_r(0x24),cru_r(0x28),cru_r(0x2c));
-
-	/* ---- 0b: CLKSEL49 = VPLL, div=1 ------------------------------ */
-	printf("\n[0b] CLKSEL49: VPLL source, div=1...\n");
-	cru_hiword(0x00c4, (3u<<8)|0xffu, (2u<<8)|0x00u);
-	printf("     CLKSEL49 = 0x%08x  (want bits[9:0]=0x200)\n", cru_r(0x00c4));
 
 	/* ---- 0c: VOP dclk enable, clear standby ----------------------- */
 	printf("\n[0c] VOP dclk enable, clear standby...\n");
@@ -208,9 +170,16 @@ main(void)
 	}
 
 	/* ---- 6: PHY power up ------------------------------------------ */
-	printf("\n[6] PHY_CONF0 = 0xD2...\n");
-	hw(0x3000,0xd2); usleep(2000);
-	printf("    PHY_CONF0=%02x\n",hr(0x3000));
+	/* ---- 6: PHY power up (two-step) -------------------------------- */
+	/* Step1: PDZ|ENTMDS|SPARECTRL|SELDATAENPOL=0xE2 (SPARECTRL was missing!) */
+	/* Step2: add GEN2_TXPWRON=0xF2. Two-step matches Linux inno PHY driver. */
+	printf("\n[6] PHY power-up sequence...\n");
+	hw(0x3000, 0xe2);   /* step1: PDZ|ENTMDS|SPARECTRL|SELDATAENPOL */
+	usleep(5000);
+	printf("    Step1 PHY_CONF0=0x%02x (want 0xe2)\n", hr(0x3000));
+	hw(0x3000, 0xf2);   /* step2: add GEN2_TXPWRON */
+	usleep(2000);
+	printf("    Step2 PHY_CONF0=0x%02x (want 0xf2)\n", hr(0x3000));
 
 	/* ---- 7: Release PHY reset ------------------------------------- */
 	printf("\n[7] Release PHY reset...\n");
@@ -237,8 +206,7 @@ main(void)
 		printf("    IH_PHY     = 0x%02x\n",hr(0x0104));
 		printf("    PHY_CONF0  = 0x%02x\n",hr(0x3000));
 		printf("    MC_PHYRSTZ = 0x%02x\n",hr(0x4005));
-		printf("    VPLL CON2  = 0x%08x  (%s)\n", cru_r(0x28),
-		    (cru_r(0x28)>>31)?"locked":"NOT LOCKED");
+		printf("    GPLL CON2  = 0x%08x  (locked=%d)\n", cru_r(0x0088), (cru_r(0x0088)>>31)&1);
 		printf("    CLKSEL49   = 0x%08x\n",cru_r(0x00c4));
 		printf("    SYS_CTRL   = 0x%08x\n",vop_r(0x0008));
 		printf("    SOC_CON20  = 0x%08x\n",g_viogrf[0x250/4]);

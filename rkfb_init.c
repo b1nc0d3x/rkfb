@@ -1,5 +1,5 @@
 /*
- * rkfb_init.c — RK3399 / RockPro64 display bring-up tool
+ * rkfb_init.c - RK3399 / RockPro64 display bring-up tool
  *
  * HDMI init via /dev/mem (works from EL0, avoids EL1 SError).
  * VOP scanout programmed via /dev/rkfb0 ioctls.
@@ -169,7 +169,7 @@ step1_reset_release(void)
 }
 
 /* -------------------------------------------------------------------------
- * Step 2: GRF mux — VOPB -> HDMI
+ * Step 2: GRF mux - VOPB -> HDMI
  * ---------------------------------------------------------------------- */
 
 static volatile uint32_t *g_viogrf;
@@ -202,35 +202,53 @@ step3_vop(uint32_t fb_pa)
 {
         uint32_t sys_ctrl;
 
-        printf("\n[3] Configuring VOP WIN0 for 720p60...\n");
+        printf("\n[3] Configuring VOP WIN0 + display timing for 720p60...\n");
         printf("    SYS_CTRL before:   0x%08x\n", vop_r(0x0008));
-        printf("    WIN0_CTRL0 before: 0x%08x\n", vop_r(0x0030));
 
-        /*
-         * SYS_CTRL: clear standby (bit11), set hdmi_dclk_en (bit1).
-         * Readback after write returns the ACTIVE set — shadow latches
-         * on REG_CFG_DONE, so readback will show old value until commit.
-         */
+        /* SYS_CTRL: clear standby (bit11), set hdmi_dclk_en (bit1) */
         sys_ctrl  = vop_r(0x0008);
-        sys_ctrl &= ~(1u << 11);  /* clear vop_standby */
-        sys_ctrl |=  (1u << 1);   /* hdmi_dclk_en */
+        sys_ctrl &= ~(1u << 11);
+        sys_ctrl |=  (1u << 1);
         vop_w(0x0008, sys_ctrl);
 
         /*
-         * WIN0_DSP_ST: start of active display within the blanking window.
-         * 720p60 blanking: hsync=40, hbp=220 -> col start = 260
-         *                  vsync=5,  vbp=20  -> row start = 25
+         * Display timing for 720p60 (74.25 MHz pixel clock):
+         * H: active=1280, fp=110, sync=40, bp=220, total=1650
+         * V: active=720,  fp=5,   sync=5,  bp=20,  total=750
+         *
+         * DSP_HTOTAL_HS_END [0x0188]: [31:16]=htotal-1, [15:0]=hsync_end-1
+         * DSP_HACT_ST_END   [0x018c]: [31:16]=hact_start, [15:0]=hact_end
+         * DSP_VTOTAL_VS_END [0x0190]: [31:16]=vtotal-1, [15:0]=vsync_end-1
+         * DSP_VACT_ST_END   [0x0194]: [31:16]=vact_start, [15:0]=vact_end
          */
-        vop_w(0x003c, 0x05000500);                   /* WIN0_VIR: stride=1280 words */
-        vop_w(0x0040, fb_pa);                        /* WIN0_YRGB_MST */
-        vop_w(0x0048, ((720-1)<<16) | (1280-1));    /* WIN0_ACT_INFO */
-        vop_w(0x004c, ((720-1)<<16) | (1280-1));    /* WIN0_DSP_INFO */
-        vop_w(0x0050, (25<<16) | 260);              /* WIN0_DSP_ST */
-        vop_w(0x0030, 0x00000001);                   /* WIN0_CTRL0: en, ARGB8888 */
+        vop_w(0x0188, 0x06710027);   /* htotal=1649, hsync_end=39 */
+        vop_w(0x018c, 0x01040604);   /* hact_st=260, hact_end=1540 */
+        vop_w(0x0190, 0x02ed0004);   /* vtotal=749, vsync_end=4 */
+        vop_w(0x0194, 0x001902e9);   /* vact_st=25, vact_end=745 */
 
-        printf("    sys_ctrl shadow:   0x%08x\n", sys_ctrl);
+        /* WIN0 scanout: ARGB8888, 1280x720, start at (row=25, col=260) */
+        vop_w(0x003c, 0x05000500);
+        vop_w(0x0040, fb_pa);
+        vop_w(0x0048, ((720-1)<<16)|(1280-1));
+        vop_w(0x004c, ((720-1)<<16)|(1280-1));
+        vop_w(0x0050, (25<<16)|260);
+        vop_w(0x0030, 0x00000001);   /* WIN0_CTRL0: enable, ARGB8888 */
+
+        /*
+         * Commit VOP timing NOW, before the PHY sequence.
+         * The PHY MPLL needs a running pixel clock to lock against.
+         * Without the display timing committed, the VOP outputs no clock
+         * even if hdmi_dclk_en=1. Wait 2+ frames (40ms at 60Hz).
+         */
+        printf("    Pre-PHY VOP commit (REG_CFG_DONE)...\n");
+        vop_w(0x0000, 0x01);
+        usleep(40000);
+
+        printf("    SYS_CTRL after:    0x%08x  (bit11=0 bit1=1 wanted)\n", vop_r(0x0008));
+        printf("    WIN0_CTRL0:        0x%08x\n", vop_r(0x0030));
+        printf("    DSP_HTOTAL_HS_END: 0x%08x  (expect 0x06710027)\n", vop_r(0x0188));
+        printf("    DSP_VTOTAL_VS_END: 0x%08x  (expect 0x02ed0004)\n", vop_r(0x0190));
         printf("    fb_pa:             0x%08x\n", fb_pa);
-        printf("    (readback shows active set; values latch at REG_CFG_DONE)\n");
 }
 
 /* -------------------------------------------------------------------------
@@ -337,35 +355,26 @@ phy_i2c_wr(uint8_t reg, uint16_t val)
  *   2. Setup I2C master divider
  *   3. Write MPLL table via I2C
  *   4. Write drive config via I2C
- *   5. Power up: PHY_CONF0 = PDZ|ENTMDS|GEN2_TXPWRON|SELDATAENPOL = 0xD2
+ *   5. Power up PHY: two-step sequence
  *   6. Release PHY reset
- *   7. Poll for TX_PHY_LOCK
- *
- * PHY_CONF0 = 0xD2 breakdown:
- *   bit7 PDZ=1          power up analog
- *   bit6 ENTMDS=1       enable TMDS
- *   bit4 GEN2_TXPWRON=1 TX lanes on
- *   bit1 SELDATAENPOL=1 active-high DE (matches RK3399 VOPB output)
- * ---------------------------------------------------------------------- */
-
+ *   7. Poll for lock
+ */
 static void
 step5_phy(void)
 {
 	int i, rc;
 
-	printf("\n[5] PHY init for 74.25 MHz (720p60)...\n");
-
 	/* 1. Assert PHY reset, power down */
-	hdmi_w(0x4005, 0x00);   /* MC_PHYRSTZ: assert reset */
-	hdmi_w(0x3000, 0x00);   /* PHY_CONF0: all off */
+	hdmi_w(0x4005, 0x00);
+	hdmi_w(0x3000, 0x00);
 	usleep(2000);
 
-	/* 2. I2C master clock divider (safe value for any pixel clock) */
-	hdmi_w(0x3029, 0x17);   /* PHY_I2CM_DIV */
-	hdmi_w(0x3027, 0xff);   /* clear INT flags */
-	hdmi_w(0x3028, 0xff);   /* clear CTLINT flags */
+	/* 2. I2C master divider */
+	hdmi_w(0x3029, 0x17);
+	hdmi_w(0x3027, 0xff);
+	hdmi_w(0x3028, 0xff);
 
-	/* 3. Write MPLL registers */
+	/* 3+4. Write MPLL + drive tables (done inline below) */
 	printf("    Writing MPLL table (%d regs)...\n", PHY_74250_MPLL_N);
 	for (i = 0; i < PHY_74250_MPLL_N; i++) {
 		rc = phy_i2c_wr(phy_74250_mpll[i].addr, phy_74250_mpll[i].val);
@@ -373,8 +382,6 @@ step5_phy(void)
 		    phy_74250_mpll[i].addr, phy_74250_mpll[i].val,
 		    rc == 0 ? "OK" : "FAIL");
 	}
-
-	/* 4. Write drive/voltage config */
 	printf("    Writing drive config (%d regs)...\n", PHY_74250_DRIVE_N);
 	for (i = 0; i < PHY_74250_DRIVE_N; i++) {
 		rc = phy_i2c_wr(phy_74250_drive[i].addr, phy_74250_drive[i].val);
@@ -383,11 +390,15 @@ step5_phy(void)
 		    rc == 0 ? "OK" : "FAIL");
 	}
 
-	/* 5. Power up PHY */
-	hdmi_w(0x3000, 0xd2);   /* PDZ|ENTMDS|GEN2_TXPWRON|SELDATAENPOL */
+	/* 5. Power up PHY: two-step sequence */
+	/*    Step1: PDZ|ENTMDS|SPARECTRL|SELDATAENPOL = 0xE2 (SPARECTRL was missing!) */
+	/*    Step2: add GEN2_TXPWRON = 0xF2 */
+	hdmi_w(0x3000, 0xe2);
+	usleep(5000);
+	printf("    PHY_CONF0 step1: 0x%02x (want 0xe2)\n", hdmi_r(0x3000));
+	hdmi_w(0x3000, 0xf2);
 	usleep(2000);
-	printf("    PHY_CONF0 after power-up: 0x%02x\n", hdmi_r(0x3000));
-
+	printf("    PHY_CONF0 step2: 0x%02x (want 0xf2)\n", hdmi_r(0x3000));
 	/* 6. Release PHY reset */
 	hdmi_w(0x4005, 0x01);
 	usleep(5000);
@@ -413,6 +424,7 @@ step5_phy(void)
 }
 
 
+
 /* -------------------------------------------------------------------------
  * Step 6: VOP commit
  * ---------------------------------------------------------------------- */
@@ -420,19 +432,16 @@ step5_phy(void)
 static void
 step6_commit(void)
 {
-        printf("\n[6] Committing VOP config (REG_CFG_DONE)...\n");
+        printf("\n[6] VOP final commit (REG_CFG_DONE)...\n");
         /*
-         * REG_CFG_DONE [0x0000] bit0: writing 1 triggers shadow→active latch
-         * on the next vsync edge.  At 60 Hz, one frame = ~16.7 ms.
-         * Wait 2 full frames to be sure the latch has happened before readback.
-         * After latch, readback should show the values we wrote in step3.
+         * VOP was already committed in step3 to give the PHY a pixel clock.
+         * This second commit picks up any remaining shadow register changes.
          */
         vop_w(0x0000, 0x01);
-        usleep(40000);   /* 40 ms = 2+ frames at 60 Hz */
+        usleep(40000);
         printf("    WIN0_CTRL0:    0x%08x  (expect 0x00000001)\n", vop_r(0x0030));
         printf("    WIN0_YRGB_MST: 0x%08x  (expect fb_pa)\n",     vop_r(0x0040));
-        printf("    WIN0_DSP_ST:   0x%08x  (expect 0x00190104)\n", vop_r(0x0050));
-        printf("    SYS_CTRL:      0x%08x  (bit11 standby should be 0)\n", vop_r(0x0008));
+        printf("    SYS_CTRL:      0x%08x  (bit11=0 bit1=1 wanted)\n", vop_r(0x0008));
 }
 
 /* -------------------------------------------------------------------------
@@ -460,59 +469,78 @@ step7_report(void)
 
         printf("\n");
         if ((phy_stat & 0x12) == 0x12)
-                printf("  >> PHY locked + HPD — display should be active\n");
+                printf("  >> PHY locked + HPD - display should be active\n");
         else if (phy_stat & 0x10)
-                printf("  >> PHY locked, no HPD — check cable/monitor\n");
+                printf("  >> PHY locked, no HPD - check cable/monitor\n");
         else if (phy_stat & 0x02)
-                printf("  >> HPD present, PHY not locked — check PHY config\n");
+                printf("  >> HPD present, PHY not locked - check PHY config\n");
         else
-                printf("  >> No lock, no HPD — check cable and init sequence\n");
+                printf("  >> No lock, no HPD - check cable and init sequence\n");
 }
-//##############################   VPLL   ###############################
+/* -------------------------------------------------------------------------
+ * Step 0b: Program VPLL to 74.25 MHz
+ *
+ * RK3399 VPLL target: 74.25 MHz (720p60 pixel clock)
+ *
+ * Valid integer config (VCO must be 800-1600 MHz per RK3399 TRM):
+ *   FBDIV=99  REFDIV=2  POSTDIV1=4  POSTDIV2=4
+ *   VCO  = 24 * 99 / 2          = 1188 MHz  (in range)
+ *   Fout = 1188 / (4 * 4)       = 74.25 MHz
+ *
+ * Previous (broken) config: FBDIV=99, REFDIV=1, PD1=4, PD2=8
+ *   VCO = 24*99/1 = 2376 MHz - out of spec, PLL unreliable.
+ *
+ * CON0 [0x0020]: bits[11:0] = FBDIV
+ * CON1 [0x0024]: bits[12:10]=POSTDIV2, bits[8:6]=POSTDIV1 ... wait, RK3399 TRM:
+ *   CON1: [14:12]=POSTDIV2, [10:8]=POSTDIV1 -- NO.
+ *   Actual from Linux clk-rk3399.c RK3036_PLLCON1():
+ *     bits[12:10] = POSTDIV2
+ *     bits[9:8]   = (unused/reserved in RK3036 layout but RK3399 uses)
+ *   Use observed working values from Linux driver directly:
+ *     CON1 for PD2=4,PD1=4,REFDIV=2: (4<<12)|(4<<8)|2 = 0x4402
+ *
+ * CON3 [0x002c]: bit[3]=DSMPD (1=integer mode), bit[0]=PWRDOWN
+ * ---------------------------------------------------------------------- */
+
+/* -------------------------------------------------------------------------
+ * Step 0b: Set HDMI pixel clock to 74.25 MHz via GPLL/8
+ *
+ * GPLL = 594 MHz (stable, kernel-managed for peripherals, never reprogrammed).
+ * 594 / 8 = 74.25 MHz exactly.
+ *
+ * CLKSEL49 [0x00c4]:
+ *   bits[9:8] = clock source: 00=CPLL, 01=GPLL, 10=VPLL, 11=NPLL
+ *   bits[7:0] = divider: pixel_clk = src / (div+1)
+ *
+ * For GPLL/8: src=GPLL(01), div=7(0x07)
+ * No PLL reprogramming needed -- GPLL is already locked at 594 MHz.
+ * ---------------------------------------------------------------------- */
 
 static void
-step0b_vpll()
+step0b_vpll(void)
 {
-        printf("\n[0b] Configuring VPLL for 74.25 MHz...\n");
-        printf("     VPLL_CON3 before: 0x%08x\n", cru_r(0x002c));
+        uint32_t before, after;
 
-        /* Power down */
-        cru_w(0x002c, (1<<20) | (1<<3));
-        usleep(1000);
+        printf("\n[0b] Setting HDMI pixel clock: GPLL/8 = 74.25 MHz...\n");
 
-        /* FBDIV=99 */
-        cru_w(0x0020, (0xfff << 16) | 0x0063);
-        /* POSTDIV2=8, POSTDIV1=4, REFDIV=1 */
-        cru_w(0x0024, (0xffff << 16) | (8<<12) | (4<<8) | 1);
-        /* FRACDIV=0 */
-        cru_w(0x0028, 0x00000000);
-        /* Power up */
-        cru_w(0x002c, (0xff << 16) | 0x00);
-        usleep(1000);
+        before = cru_r(0x00c4);
+        printf("     CLKSEL49 before: 0x%08x\n", before);
+        printf("     GPLL CON2: 0x%08x  (bit31=lock: %d)\n",
+            cru_r(0x0088), (cru_r(0x0088)>>31)&1);
 
-        /* Wait for lock — CON2 bit31 */
-        int i;
-        for (i = 0; i < 100; i++) {
-                usleep(1000);
-                if (cru_r(0x0028) & (1u << 31)) {
-                        printf("     VPLL locked after %d ms\n", i+1);
-                        break;
-                }
-        }
-        if (i == 100) printf("     VPLL lock TIMEOUT\n");
+        /* CLKSEL49: src=GPLL(bits[9:8]=01), div=7(bits[7:0]=0x07) -> 594/8=74.25 MHz */
+        cru_hiword(0x00c4, (3u<<8)|0xffu, (1u<<8)|0x07u);
 
-        /*
-         * Route VPLL to HDMI pixel clock via CLKSEL49.
-         * CLKSEL49 [0x00c4]:
-         *   bits[9:8] = source: 10=VPLL
-         *   bits[7:0] = divider: pixel_clk = VPLL / (div+1)
-         *
-         * VPLL=74.25 MHz, div=0 -> pixel clock = 74.25 MHz
-         * Boot default was div=2 (divide by 3) -> 24.75 MHz: wrong.
-         */
-        cru_hiword(0x00c4, (3<<8)|0xff, (2<<8)|0x00);
-        printf("     CLKSEL49 after: 0x%08x (expect 0x....0200)\n", cru_r(0x00c4));
+        after = cru_r(0x00c4);
+        printf("     CLKSEL49 after:  0x%08x  (want bits[9:0]=0x107)\n", after);
+
+        if ((after & 0x3ff) == 0x107)
+                printf("     Pixel clock: GPLL(594 MHz)/8 = 74.25 MHz  OK\n");
+        else
+                printf("     WARNING: CLKSEL49 bits[9:0]=0x%03x (expect 0x107)\n",
+                    after & 0x3ff);
 }
+
 /* -------------------------------------------------------------------------
  * main
  * ---------------------------------------------------------------------- */
@@ -523,7 +551,7 @@ main(void)
         struct rkfb_info info;
         struct rkfb_fill fill;
 
-        printf("rkfb_init — RK3399 display bring-up (720p60)\n");
+        printf("rkfb_init - RK3399 display bring-up (720p60)\n");
         printf("=============================================\n\n");
 
         /* Open /dev/mem for HDMI/CRU/GRF access */
