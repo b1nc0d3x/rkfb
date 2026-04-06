@@ -409,9 +409,8 @@ step5_phy(void)
 		}
 		usleep(10000);
 	}
-	printf("    PHY lock TIMEOUT. PHY_STAT0=0x%02x\n", hdmi_r(0x3004));
-}
-
+	printf("    PHY lock TIMEOUT. PHY_STAT0=0x%02x\n  
+	       
 
 /* -------------------------------------------------------------------------
  * Step 6: VOP commit
