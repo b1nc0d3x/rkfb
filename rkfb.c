@@ -91,9 +91,15 @@ static int
 rkfb_vop_write_allowed(uint32_t off)
 {
         switch (off) {
-        case 0x0000: case 0x0008: case 0x0010: case 0x0030:
-        case 0x003c: case 0x0040: case 0x0048: case 0x004c:
-        case 0x0050: case 0x020c: case 0x028c: case 0x029c:
+        /* System / global */
+        case 0x0000: case 0x0008: case 0x0010:
+        /* WIN0 */
+        case 0x0030: case 0x003c: case 0x0040: case 0x0048:
+        case 0x004c: case 0x0050:
+        /* Display timing: HTOTAL/HS, HACT, VTOTAL/VS, VACT */
+        case 0x0188: case 0x018c: case 0x0190: case 0x0194:
+        /* Post-processing / other */
+        case 0x020c: case 0x028c: case 0x029c:
         case 0x0310: case 0x0314: case 0x0318:
                 return (1);
         default:
