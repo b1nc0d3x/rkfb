@@ -57,9 +57,8 @@ static int g_rkfb;
  * Accessors
  * ---------------------------------------------------------------------- */
 
-/* DW-HDMI on RK3399: 4-byte register stride. Physical = logical * 4 */
-static inline uint8_t  hdmi_r(uint32_t off) { return g_hdmi[off*4]; }
-static inline void     hdmi_w(uint32_t off, uint8_t v) { g_hdmi[off*4] = v; }
+static inline uint8_t  hdmi_r(uint32_t off) { return g_hdmi[off]; }
+static inline void     hdmi_w(uint32_t off, uint8_t v) { g_hdmi[off] = v; }
 static inline uint32_t cru_r(uint32_t off) { return g_cru[off/4]; }
 static inline void     cru_w(uint32_t off, uint32_t v) { g_cru[off/4] = v; }
 static inline uint32_t grf_r(uint32_t off) { return g_grf[off/4]; }
@@ -161,8 +160,8 @@ step1_reset_release(void)
         printf("    MC_SWRSTZREQ before: 0x%02x\n", hdmi_r(0x4002));
         printf("    MC_CLKDIS    before: 0x%02x\n", hdmi_r(0x4001));
 
-        hdmi_w(0x4001, 0x74);   /* MC_CLKDIS: pixel clk on, others gated */
-        hdmi_w(0x4002, 0xdf);   /* MC_SWRSTZREQ: release all except TMDS */
+        hdmi_w(0x4001, 0x00);   /* MC_CLKDIS: all clocks on */
+        hdmi_w(0x4002, 0xff);   /* MC_SWRSTZREQ: release all resets */
         usleep(5000);
 
         printf("    MC_SWRSTZREQ after:  0x%02x\n", hdmi_r(0x4002));
@@ -261,7 +260,7 @@ step4_fc_720p60(void)
 {
         printf("\n[4] Programming HDMI frame composer (720p60)...\n");
 
-        hdmi_w(0x1000, 0x78);   /* FC_INVIDCONF: HDMI, VSYNC_H, HSYNC_H (from working state) */
+        hdmi_w(0x1000, 0xe0);   /* FC_INVIDCONF: HDMI, VSYNC_H, HSYNC_H, DE_H */
         hdmi_w(0x1001, 0x00);   /* FC_INHACTV0: hactive=1280 low */
         hdmi_w(0x1002, 0x05);   /* FC_INHACTV1: hactive=1280 high */
         hdmi_w(0x1003, 0x72);   /* FC_INHBLANK0: hblank=370 */
@@ -365,13 +364,15 @@ step5_phy(void)
 {
 	int i, rc;
 
-	/* 1. Clear PDATAEN pre-init, setup I2C divider */
-	/* Do NOT assert MC_PHYRSTZ=0 or PHY_CONF0=0 here --
-	 * those kill an existing lock. Just configure I2C and write MPLL. */
-	hdmi_w(0x3029, 0x0b);   /* PHY_I2CM_DIV from working state */
+	/* 1. Assert PHY reset, power down */
+	hdmi_w(0x4005, 0x00);
+	hdmi_w(0x3000, 0x00);
+	usleep(2000);
+
+	/* 2. I2C master divider */
+	hdmi_w(0x3029, 0x17);
 	hdmi_w(0x3027, 0xff);
 	hdmi_w(0x3028, 0xff);
-	phy_i2c_wr(0x02, 0x0000);   /* clear PDATAEN */
 
 	/* 3+4. Write MPLL + drive tables (done inline below) */
 	printf("    Writing MPLL table (%d regs)...\n", PHY_74250_MPLL_N);
@@ -389,13 +390,15 @@ step5_phy(void)
 		    rc == 0 ? "OK" : "FAIL");
 	}
 
-	/* 5. Power up PHY
-	 * PHY_CONF0 = 0xee from working state capture:
-	 * PDZ|ENTMDS|SPARECTRL|GEN2_PDDQ|bit2|SELDATAENPOL
-	 * Single-step, no GEN2_TXPWRON needed for Innosilicon RK3399 */
-	hdmi_w(0x3000, 0xee);
+	/* 5. Power up PHY: two-step sequence */
+	/*    Step1: PDZ|ENTMDS|SPARECTRL|SELDATAENPOL = 0xE2 (SPARECTRL was missing!) */
+	/*    Step2: add GEN2_TXPWRON = 0xF2 */
+	hdmi_w(0x3000, 0xe2);
 	usleep(5000);
-	printf("    PHY_CONF0: 0x%02x (want 0xee)\n", hdmi_r(0x3000));
+	printf("    PHY_CONF0 step1: 0x%02x (want 0xe2)\n", hdmi_r(0x3000));
+	hdmi_w(0x3000, 0xf2);
+	usleep(2000);
+	printf("    PHY_CONF0 step2: 0x%02x (want 0xf2)\n", hdmi_r(0x3000));
 	/* 6. Release PHY reset */
 	hdmi_w(0x4005, 0x01);
 	usleep(5000);

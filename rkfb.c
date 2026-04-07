@@ -5,10 +5,10 @@
  * All rights reserved.
  *
  * RK3399 / RockPro64 VOP framebuffer + HDMI bring-up driver.
- * FreeBSD OFW kernel driver — proper newbus/bus_space attachment.
+ * FreeBSD OFW kernel driver - proper newbus/bus_space attachment.
  *
  * Attaches to "rockchip,rk3399-vop-big" via device tree.
- * All MMIO via bus_space — no raw pmap_mapdev.
+ * All MMIO via bus_space - no raw pmap_mapdev.
  */
 
 #include <sys/param.h>
@@ -84,8 +84,12 @@ struct rkfb_softc {
 #define GRF_WRITE4(sc, o, v)   bus_space_write_4((sc)->grf_bst, (sc)->grf_bsh,  (o), (v))
 #define CRU_READ4(sc, o)       bus_space_read_4((sc)->cru_bst,  (sc)->cru_bsh,  (o))
 #define CRU_WRITE4(sc, o, v)   bus_space_write_4((sc)->cru_bst, (sc)->cru_bsh,  (o), (v))
-#define HDMI_READ1(sc, o)      bus_space_read_1((sc)->hdmi_bst, (sc)->hdmi_bsh, (o))
-#define HDMI_WRITE1(sc, o, v)  bus_space_write_1((sc)->hdmi_bst,(sc)->hdmi_bsh, (o), (v))
+/*
+ * DW-HDMI on RK3399 uses 4-byte register stride.
+ * Physical byte offset = logical register address * 4.
+ */
+#define HDMI_READ1(sc, o)      bus_space_read_1((sc)->hdmi_bst, (sc)->hdmi_bsh, (o)*4)
+#define HDMI_WRITE1(sc, o, v)  bus_space_write_1((sc)->hdmi_bst,(sc)->hdmi_bsh, (o)*4, (v))
 
 static int
 rkfb_vop_write_allowed(uint32_t off)
@@ -160,21 +164,21 @@ rkfb_read(struct cdev *dev, struct uio *uio, int ioflag)
         return (uiomove((void *)(sc->fb_va + uio->uio_offset), avail, uio));
 }
 
-static inline void
-rkfb_hdmi_write1_safe(struct rkfb_softc *sc, bus_size_t off, uint8_t val)
-{
-        uint64_t daif;
+//static inline void
+//rkfb_hdmi_write1_safe(struct rkfb_softc *sc, bus_size_t off, uint8_t val)
+//{
+//      uint64_t daif;
         
         /* Save and mask SError */
-        __asm volatile("mrs %0, daif" : "=r"(daif));
-        __asm volatile("msr daifset, #4");  /* set A bit = mask SError */
+//    __asm volatile("mrs %0, daif" : "=r"(daif));
+//    __asm volatile("msr daifset, #4");  /* set A bit = mask SError */
         
-        bus_space_write_1(sc->hdmi_bst, sc->hdmi_bsh, off, val);
-        __asm volatile("dsb sy" ::: "memory");
+// bus_space_write_1(sc->hdmi_bst, sc->hdmi_bsh, off*4, val);
+//      __asm volatile("dsb sy" ::: "memory");
         
         /* Restore DAIF */
-        __asm volatile("msr daif, %0" :: "r"(daif));
-}
+//  __asm volatile("msr daif, %0" :: "r"(daif));
+//	}*/
 
 static int
 rkfb_write(struct cdev *dev, struct uio *uio, int ioflag)
@@ -209,7 +213,7 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                         if ((ro->off & 3) || ro->off >= RKFB_CRU_SIZE) return (EINVAL);
                         ro->val = CRU_READ4(sc, ro->off); return (0);
                 case RKFB_BLOCK_HDMI:
-                        if (ro->off >= RKFB_HDMI_SIZE) return (EINVAL);
+                        if (ro->off >= 0x8000) return (EINVAL);
                         ro->val = HDMI_READ1(sc, ro->off); return (0);
                 default: return (EINVAL);
                 }
@@ -234,7 +238,7 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
 
         case RKFB_HDMI_REG_WRITE: {
                 struct rkfb_regop *ro = (struct rkfb_regop *)data;
-                if (ro->off >= RKFB_HDMI_SIZE) return (EINVAL);
+                if (ro->off >= 0x8000) return (EINVAL);
                 HDMI_WRITE1(sc, ro->off, (uint8_t)(ro->val & 0xff));
                 __asm volatile("dsb sy" ::: "memory");
                 __asm volatile("isb" ::: "memory");
@@ -265,7 +269,7 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                 struct rkfb_regdump *rd = (struct rkfb_regdump *)data;
                 uint32_t i;
                 if (rd->count == 0 || rd->count > 256) return (EINVAL);
-                if (rd->base + rd->count > RKFB_HDMI_SIZE) return (EINVAL);
+                if (rd->base + rd->count > 0x8000) return (EINVAL);
                 for (i = 0; i < rd->count; i++)
                         device_printf(sc->dev, "HDMI[0x%04x] = 0x%02x\n",
                             rd->base + i, HDMI_READ1(sc, rd->base + i));
