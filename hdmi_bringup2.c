@@ -27,6 +27,7 @@ static volatile uint32_t *g_viogrf;
 static volatile uint32_t *g_vop;
 static volatile uint8_t  *g_hdmi;
 static volatile uint32_t *g_gpio2;
+static volatile uint32_t *g_gpio4;
 
 static inline uint8_t  hr(uint32_t o)              { return g_hdmi[o]; }
 static inline void     hw(uint32_t o, uint8_t v)    { g_hdmi[o] = v; }
@@ -48,8 +49,13 @@ static void hold_regs(void)
     /* GPIO4C pinmux: C7=HPD, C6=SDA, C5=SCL */
     g_grf[0x010c/4] = (0xfc00u<<16) | 0x5400u;
     /* GPIO2_A5 = avdd_1v8_hdmi enable */
-    g_gpio2[1] |= (1u<<5);   /* output */
-    g_gpio2[0] |= (1u<<5);   /* high */
+    g_gpio2[1] |= (1u<<5);
+    g_gpio2[0] |= (1u<<5);
+    /* MC_PHYRSTZ: keep PHY reset released */
+    g_hdmi[0x4005] = 0x01;
+    /* MC clocks/reset */
+    g_hdmi[0x4001] = 0x00;
+    g_hdmi[0x4002] = 0xff;
 }
 
 struct mpll_reg { uint8_t addr; uint16_t val; };
@@ -69,7 +75,7 @@ static int phy_i2c_write(uint8_t reg, uint16_t val)
     hw(0x3020,0x69); hw(0x3021,reg);
     hw(0x3022,(val>>8)&0xff); hw(0x3023,val&0xff);
     hw(0x3026,0x10);
-    for (i=0; i<100; i++) {
+    for (i=0; i<300; i++) {  /* 30 seconds */
         usleep(500); stat=hr(0x3027);
         if (stat&0x02) { hw(0x3027,0x02); return 0; }
         if (stat&0x08) { hw(0x3027,0x08); return -1; }
@@ -94,8 +100,10 @@ int main(void)
     g_vop    = mmap(NULL,0x2000, PROT_READ|PROT_WRITE,MAP_SHARED,fd,VOP_PA);
     g_hdmi   = mmap(NULL,0x20000,PROT_READ|PROT_WRITE,MAP_SHARED,fd,HDMI_PA);
     g_gpio2  = mmap(NULL,0x100,  PROT_READ|PROT_WRITE,MAP_SHARED,fd,GPIO2_PA);
+    g_gpio4  = mmap(NULL,0x100,  PROT_READ,            MAP_SHARED,fd,0xff790000);
     if (g_cru==MAP_FAILED||g_grf==MAP_FAILED||g_viogrf==MAP_FAILED||
-        g_vop==MAP_FAILED||g_hdmi==MAP_FAILED||g_gpio2==MAP_FAILED)
+        g_vop==MAP_FAILED||g_hdmi==MAP_FAILED||g_gpio2==MAP_FAILED||
+        g_gpio4==MAP_FAILED)
         err(1,"mmap");
 
     /* === 1: Pixel clock === */
@@ -165,21 +173,17 @@ int main(void)
 
     /* === 7: Poll with register hold === */
     printf("\n[7] Polling (holding all regs)...\n");
-    for (i=0; i<100; i++) {
+    for (i=0; i<3000; i++) {
         uint8_t stat = hr(0x3004);
         uint8_t ih   = hr(0x0104);
-        uint32_t hpd_gpio = (((volatile uint32_t*)g_hdmi)[0]) ; /* dummy */
-        uint32_t gpio4 = 0;
-        /* Read GPIO4 for HPD */
-        volatile uint32_t *g4 = mmap(NULL,0x100,PROT_READ,MAP_SHARED,fd,0xff790000);
-        if (g4!=MAP_FAILED) { gpio4=g4[0]; munmap((void*)g4,0x100); }
+        uint32_t gpio4 = g_gpio4[0];
 
-        if ((i%10)==0||(stat&0x12))
-            printf("    [%3dms] PHY_STAT0=%02x IH=%02x SOC_CON20=%08x HPD_C7=%d%s%s\n",
+        if ((i%50)==0||(stat&0x12))
+            printf("    [%3dms] STAT=%02x IH=%02x CON20=%08x HPD=%d MC_PHYRSTZ=%02x%s%s\n",
                 i*10, stat, ih, g_viogrf[0x0250/4],
-                (gpio4>>23)&1,
+                (gpio4>>23)&1, g_hdmi[0x4005],
                 (stat&0x10)?" LOCKED":"",
-                (stat&0x02)?" HPD":"");
+                (stat&0x02)?" HPD_PHY":"");
         if (stat&0x10) break;
         hold_regs();
         usleep(10000);

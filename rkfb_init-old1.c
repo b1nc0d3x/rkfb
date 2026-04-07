@@ -365,13 +365,15 @@ step5_phy(void)
 {
 	int i, rc;
 
-	/* 1. Clear PDATAEN pre-init, setup I2C divider */
-	/* Do NOT assert MC_PHYRSTZ=0 or PHY_CONF0=0 here --
-	 * those kill an existing lock. Just configure I2C and write MPLL. */
-	hdmi_w(0x3029, 0x0b);   /* PHY_I2CM_DIV from working state */
+	/* 1. Assert PHY reset, power down */
+	hdmi_w(0x4005, 0x00);
+	hdmi_w(0x3000, 0x00);
+	usleep(2000);
+
+	/* 2. I2C master divider */
+	hdmi_w(0x3029, 0x17);
 	hdmi_w(0x3027, 0xff);
 	hdmi_w(0x3028, 0xff);
-	phy_i2c_wr(0x02, 0x0000);   /* clear PDATAEN */
 
 	/* 3+4. Write MPLL + drive tables (done inline below) */
 	printf("    Writing MPLL table (%d regs)...\n", PHY_74250_MPLL_N);
