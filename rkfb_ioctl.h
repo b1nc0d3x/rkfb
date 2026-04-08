@@ -5,10 +5,11 @@
 #include <sys/types.h>
 
 #define RKFB_IOCTL_BASE   'R'
-#define RKFB_BLOCK_VOP    0
-#define RKFB_BLOCK_GRF    1
-#define RKFB_BLOCK_CRU    2
-#define RKFB_BLOCK_HDMI   3
+#define RKFB_BLOCK_VOP     0
+#define RKFB_BLOCK_GRF     1
+#define RKFB_BLOCK_CRU     2
+#define RKFB_BLOCK_HDMI    3
+#define RKFB_BLOCK_VIOGRF  4
 
 struct rkfb_info {
 	uint32_t width;
@@ -50,6 +51,14 @@ struct rkfb_regmaskop {
 	uint32_t mask;
 };
 
+
+/*
+ * mmap offsets for /dev/rkfb0:
+ *   0                    .. fb_size-1       : framebuffer (WRITE_COMBINING)
+ *   RKFB_MMAP_HDMI_OFF   .. +RKFB_HDMI_SIZE : HDMI registers (DEVICE)
+ */
+#define RKFB_MMAP_HDMI_OFF    0x400000UL   /* 4MB - well past 3.5MB framebuffer */
+#define RKFB_HDMI_SIZE        0x20000UL
 
 #define RKFB_GETINFO _IOR(RKFB_IOCTL_BASE, 0, struct rkfb_info)
 #define RKFB_CLEAR _IOW(RKFB_IOCTL_BASE, 1, struct rkfb_fill)
