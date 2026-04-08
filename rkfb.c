@@ -45,11 +45,12 @@
 #define RKFB_BPP          32
 
 #define RKFB_HDMI_PA    0xff940000UL
-#define RKFB_HDMI_SIZE  0x20000
 #define RKFB_GRF_PA     0xff320000UL
 #define RKFB_GRF_SIZE   0x8000
 #define RKFB_CRU_PA     0xff760000UL
 #define RKFB_CRU_SIZE   0x1000
+#define RKFB_VIOGRF_PA  0xff770000UL
+#define RKFB_VIOGRF_SIZE 0x1000
 
 struct rkfb_softc {
         device_t                dev;
@@ -65,6 +66,8 @@ struct rkfb_softc {
         bus_space_handle_t      grf_bsh;
         bus_space_tag_t         cru_bst;
         bus_space_handle_t      cru_bsh;
+        bus_space_tag_t         viogrf_bst;
+        bus_space_handle_t      viogrf_bsh;
 
         vm_offset_t             fb_va;
         vm_paddr_t              fb_pa;
@@ -80,16 +83,23 @@ struct rkfb_softc {
 
 #define VOP_READ4(sc, o)       bus_space_read_4((sc)->vop_bst,  (sc)->vop_bsh,  (o))
 #define VOP_WRITE4(sc, o, v)   bus_space_write_4((sc)->vop_bst, (sc)->vop_bsh,  (o), (v))
-#define GRF_READ4(sc, o)       bus_space_read_4((sc)->grf_bst,  (sc)->grf_bsh,  (o))
-#define GRF_WRITE4(sc, o, v)   bus_space_write_4((sc)->grf_bst, (sc)->grf_bsh,  (o), (v))
-#define CRU_READ4(sc, o)       bus_space_read_4((sc)->cru_bst,  (sc)->cru_bsh,  (o))
-#define CRU_WRITE4(sc, o, v)   bus_space_write_4((sc)->cru_bst, (sc)->cru_bsh,  (o), (v))
+#define GRF_READ4(sc, o)       bus_space_read_4((sc)->grf_bst,    (sc)->grf_bsh,    (o))
+#define GRF_WRITE4(sc, o, v)   bus_space_write_4((sc)->grf_bst,   (sc)->grf_bsh,    (o), (v))
+#define CRU_READ4(sc, o)       bus_space_read_4((sc)->cru_bst,    (sc)->cru_bsh,    (o))
+#define CRU_WRITE4(sc, o, v)   bus_space_write_4((sc)->cru_bst,   (sc)->cru_bsh,    (o), (v))
+#define VIOGRF_READ4(sc, o)    bus_space_read_4((sc)->viogrf_bst, (sc)->viogrf_bsh, (o))
+#define VIOGRF_WRITE4(sc, o, v) bus_space_write_4((sc)->viogrf_bst,(sc)->viogrf_bsh,(o), (v))
 /*
  * DW-HDMI on RK3399 uses 4-byte register stride.
  * Physical byte offset = logical register address * 4.
+ *
+ * Reads: byte reads (LDRB) work fine via the APB bridge.
+ * Writes: use 32-bit word writes (STR) — the RK3399 APB bridge does not
+ *         support byte write strobes (PSTRB) for HDMI, causing PSLVERR
+ *         on STRB. The register value sits in bits[7:0] of the 32-bit word.
  */
 #define HDMI_READ1(sc, o)      bus_space_read_1((sc)->hdmi_bst, (sc)->hdmi_bsh, (o)*4)
-#define HDMI_WRITE1(sc, o, v)  bus_space_write_1((sc)->hdmi_bst,(sc)->hdmi_bsh, (o)*4, (v))
+#define HDMI_WRITE1(sc, o, v)  bus_space_write_4((sc)->hdmi_bst,(sc)->hdmi_bsh, (o)*4, (uint8_t)(v))
 
 static int
 rkfb_vop_write_allowed(uint32_t off)
@@ -146,11 +156,23 @@ rkfb_mmap(struct cdev *dev, vm_ooffset_t offset, vm_paddr_t *paddr,
     int nprot, vm_memattr_t *memattr)
 {
         struct rkfb_softc *sc = dev->si_drv1;
-        if (offset >= (vm_ooffset_t)sc->fb_size)
-                return (EINVAL);
-        *paddr   = sc->fb_pa + offset;
-        *memattr = VM_MEMATTR_WRITE_COMBINING;
-        return (0);
+
+        /* Framebuffer region */
+        if (offset < (vm_ooffset_t)sc->fb_size) {
+                *paddr   = sc->fb_pa + offset;
+                *memattr = VM_MEMATTR_WRITE_COMBINING;
+                return (0);
+        }
+
+        /* HDMI register region (userspace-safe: SError → SIGBUS, not panic) */
+        if (offset >= RKFB_MMAP_HDMI_OFF &&
+            offset <  RKFB_MMAP_HDMI_OFF + RKFB_HDMI_SIZE) {
+                *paddr   = RKFB_HDMI_PA + (offset - RKFB_MMAP_HDMI_OFF);
+                *memattr = VM_MEMATTR_DEVICE;
+                return (0);
+        }
+
+        return (EINVAL);
 }
 
 static int
@@ -215,6 +237,9 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                 case RKFB_BLOCK_HDMI:
                         if (ro->off >= 0x8000) return (EINVAL);
                         ro->val = HDMI_READ1(sc, ro->off); return (0);
+                case RKFB_BLOCK_VIOGRF:
+                        if ((ro->off & 3) || ro->off >= RKFB_VIOGRF_SIZE) return (EINVAL);
+                        ro->val = VIOGRF_READ4(sc, ro->off); return (0);
                 default: return (EINVAL);
                 }
         }
@@ -232,6 +257,9 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                 case RKFB_BLOCK_CRU:
                         if ((ro->off & 3) || ro->off >= RKFB_CRU_SIZE) return (EINVAL);
                         CRU_WRITE4(sc, ro->off, ro->val); return (0);
+                case RKFB_BLOCK_VIOGRF:
+                        if ((ro->off & 3) || ro->off >= RKFB_VIOGRF_SIZE) return (EINVAL);
+                        VIOGRF_WRITE4(sc, ro->off, ro->val); return (0);
                 default: return (EPERM);
                 }
         }
@@ -240,9 +268,7 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                 struct rkfb_regop *ro = (struct rkfb_regop *)data;
                 if (ro->off >= 0x8000) return (EINVAL);
                 HDMI_WRITE1(sc, ro->off, (uint8_t)(ro->val & 0xff));
-                __asm volatile("dsb sy" ::: "memory");
-                __asm volatile("isb" ::: "memory");
-	        return (0);
+                return (0);
         }
 
         case RKFB_VOP_MASKWRITE: {
@@ -370,20 +396,23 @@ rkfb_attach(device_t dev)
         if (error) { device_printf(dev, "cannot map CRU\n"); goto fail_grf; }
         sc->cru_bst = rman_get_bustag(sc->vop_res);
 
+        error = bus_space_map(rman_get_bustag(sc->vop_res), RKFB_VIOGRF_PA,
+            RKFB_VIOGRF_SIZE, 0, &sc->viogrf_bsh);
+        if (error) { device_printf(dev, "cannot map VIO GRF\n"); goto fail_cru; }
+        sc->viogrf_bst = rman_get_bustag(sc->vop_res);
+
         /*error = bus_space_map(rman_get_bustag(sc->vop_res), RKFB_HDMI_PA,
             RKFB_HDMI_SIZE, BUS_SPACE_MAP_NONPOSTED, &sc->hdmi_bsh);
         if (error) { device_printf(dev, "cannot map HDMI\n"); goto fail_cru; }
         sc->hdmi_bst = rman_get_bustag(sc->vop_res);*/
 
-	void *hdmi_va = pmap_mapdev_attr(RKFB_HDMI_PA, RKFB_HDMI_SIZE,
-    VM_MEMATTR_DEVICE_NP);
-if (hdmi_va == NULL) {
-    device_printf(dev, "cannot map HDMI\n");
-    error = ENOMEM;
-    goto fail_cru;
-}
-sc->hdmi_bsh = (bus_space_handle_t)hdmi_va;
-sc->hdmi_bst = rman_get_bustag(sc->vop_res);
+        error = bus_space_map(rman_get_bustag(sc->vop_res), RKFB_HDMI_PA,
+            RKFB_HDMI_SIZE, 0, &sc->hdmi_bsh);
+        if (error) {
+                device_printf(dev, "cannot map HDMI\n");
+                goto fail_viogrf;
+        }
+        sc->hdmi_bst = rman_get_bustag(sc->vop_res);
 
 
 	device_printf(dev, "HDMI mapped\n");
@@ -414,12 +443,13 @@ sc->hdmi_bst = rman_get_bustag(sc->vop_res);
         device_printf(dev, "ready /dev/rkfb0\n");
         return (0);
 
-fail_fb:    kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
-fail_hdmi:  bus_space_unmap(sc->hdmi_bst, sc->hdmi_bsh, RKFB_HDMI_SIZE);
-fail_cru:   bus_space_unmap(sc->cru_bst,  sc->cru_bsh,  RKFB_CRU_SIZE);
-fail_grf:   bus_space_unmap(sc->grf_bst,  sc->grf_bsh,  RKFB_GRF_SIZE);
-fail_vop:   bus_release_resource(dev, SYS_RES_MEMORY, 0, sc->vop_res);
-fail_mtx:   mtx_destroy(&sc->mtx);
+fail_fb:      kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
+fail_hdmi:    bus_space_unmap(sc->hdmi_bst, sc->hdmi_bsh, RKFB_HDMI_SIZE);
+fail_viogrf:  bus_space_unmap(sc->viogrf_bst, sc->viogrf_bsh, RKFB_VIOGRF_SIZE);
+fail_cru:     bus_space_unmap(sc->cru_bst,    sc->cru_bsh,    RKFB_CRU_SIZE);
+fail_grf:     bus_space_unmap(sc->grf_bst,    sc->grf_bsh,    RKFB_GRF_SIZE);
+fail_vop:     bus_release_resource(dev, SYS_RES_MEMORY, 0, sc->vop_res);
+fail_mtx:     mtx_destroy(&sc->mtx);
         return (error);
 }
 
@@ -431,8 +461,9 @@ rkfb_detach(device_t dev)
         if (sc->fb_va  != 0)    kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
         //if (sc->hdmi_bsh != 0)  bus_space_unmap(sc->hdmi_bst, sc->hdmi_bsh, RKFB_HDMI_SIZE);
         
-	if (sc->hdmi_bsh != 0)
-    pmap_unmapdev((void *)sc->hdmi_bsh, RKFB_HDMI_SIZE);
+        if (sc->hdmi_bsh != 0)
+                bus_space_unmap(sc->hdmi_bst, sc->hdmi_bsh, RKFB_HDMI_SIZE);
+        if (sc->viogrf_bsh != 0) bus_space_unmap(sc->viogrf_bst, sc->viogrf_bsh, RKFB_VIOGRF_SIZE);
 	if (sc->cru_bsh  != 0)  bus_space_unmap(sc->cru_bst,  sc->cru_bsh,  RKFB_CRU_SIZE);
         if (sc->grf_bsh  != 0)  bus_space_unmap(sc->grf_bst,  sc->grf_bsh,  RKFB_GRF_SIZE);
         if (sc->vop_res  != NULL) bus_release_resource(dev, SYS_RES_MEMORY, 0, sc->vop_res);
