@@ -1,0 +1,15 @@
+RK3399 DW-HDMI register spacing in this tree
+========================================
+
+The DW-HDMI controller on RK3399 is byte-addressed logically, but the MMIO
+window exposed here uses 32-bit spacing between logical registers. Direct
+helpers must access HDMI register N as base[N * 4], not base[N].
+
+Why this matters:
+- old direct helpers in this repo were reading and writing the wrong offsets
+- that produced false all-zero snapshots and fake write failures
+- PHY/VOP debugging only became consistent after fixing the stride
+
+Rule for direct tools:
+- use helper macros/functions such as HR(o)/HW(o,v) or g_hdmi[o * 4]
+- do not index the DW-HDMI block as g_hdmi[o] or hdmi[o]

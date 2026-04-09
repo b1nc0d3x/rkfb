@@ -28,8 +28,8 @@ static volatile uint32_t *g_vop;
 static volatile uint8_t  *g_hdmi;
 static volatile uint32_t *g_gpio2;
 
-static inline uint8_t  hr(uint32_t o)              { return g_hdmi[o]; }
-static inline void     hw(uint32_t o, uint8_t v)    { g_hdmi[o] = v; }
+static inline uint8_t  hr(uint32_t o)              { return g_hdmi[o*4]; }
+static inline void     hw(uint32_t o, uint8_t v)    { g_hdmi[o*4] = v; }
 static inline uint32_t cru_r(uint32_t o)            { return g_cru[o/4]; }
 static inline void     cru_w(uint32_t o, uint32_t v){ g_cru[o/4] = v; }
 static inline uint32_t vop_r(uint32_t o)            { return g_vop[o/4]; }
@@ -43,8 +43,8 @@ static void hold_regs(void)
 {
     /* CLKSEL49: GPLL/8 = 74.25 MHz */
     cru_hw(0x00c4, (3u<<8)|0xffu, (1u<<8)|0x07u);
-    /* VIO GRF: VOPB->HDMI */
-    g_viogrf[0x0250/4] = (0x00ffu<<16) | 0x0040u;
+    /* VIO GRF: bsd harbor route */
+    g_viogrf[0x0250/4] = (0x00ffu<<16) | 0x0000u;
     /* GPIO4C pinmux: C7=HPD, C6=SDA, C5=SCL */
     g_grf[0x010c/4] = (0xfc00u<<16) | 0x5400u;
     /* GPIO2_A5 = avdd_1v8_hdmi enable */
@@ -129,9 +129,9 @@ int main(void)
     printf("    SYS_CTRL   = 0x%08x (bit1=1 wanted)\n",  vop_r(0x0008));
 
     /* === 4: Pinmux + GRF mux === */
-    printf("\n[4] Pinmux + VIO GRF VOPB->HDMI\n");
+    printf("\n[4] Pinmux + VIO GRF bsd harbor route\n");
     g_grf[0x010c/4] = (0xfc00u<<16) | 0x5400u;   /* GPIO4C: HPD+SDA+SCL */
-    g_viogrf[0x0250/4] = (0x00ffu<<16) | 0x0040u; /* VOPB->HDMI */
+    g_viogrf[0x0250/4] = (0x00ffu<<16) | 0x0000u; /* bsd harbor route */
     printf("    GPIO4C_IOMUX = 0x%08x (HPD bit[15:14]=%d)\n",
         g_grf[0x010c/4], (g_grf[0x010c/4]>>14)&3);
     printf("    SOC_CON20    = 0x%08x (bit6=%d)\n",

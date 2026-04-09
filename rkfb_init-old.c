@@ -57,8 +57,8 @@ static int g_rkfb;
  * Accessors
  * ---------------------------------------------------------------------- */
 
-static inline uint8_t  hdmi_r(uint32_t off) { return g_hdmi[off]; }
-static inline void     hdmi_w(uint32_t off, uint8_t v) { g_hdmi[off] = v; }
+static inline uint8_t  hdmi_r(uint32_t off) { return g_hdmi[(off)*4]; }
+static inline void     hdmi_w(uint32_t off, uint8_t v) { g_hdmi[(off)*4] = v; }
 static inline uint32_t cru_r(uint32_t off) { return g_cru[off/4]; }
 static inline void     cru_w(uint32_t off, uint32_t v) { g_cru[off/4] = v; }
 static inline uint32_t grf_r(uint32_t off) { return g_grf[off/4]; }

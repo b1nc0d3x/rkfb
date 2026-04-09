@@ -29,8 +29,8 @@ static volatile uint8_t  *g_hdmi;
 static volatile uint32_t *g_gpio2;
 static volatile uint32_t *g_gpio4;
 
-static inline uint8_t  hr(uint32_t o)              { return g_hdmi[o]; }
-static inline void     hw(uint32_t o, uint8_t v)    { g_hdmi[o] = v; }
+static inline uint8_t  hr(uint32_t o)              { return g_hdmi[(o)*4]; }
+static inline void     hw(uint32_t o, uint8_t v)    { g_hdmi[(o)*4] = v; }
 static inline uint32_t cru_r(uint32_t o)            { return g_cru[o/4]; }
 static inline void     cru_w(uint32_t o, uint32_t v){ g_cru[o/4] = v; }
 static inline uint32_t vop_r(uint32_t o)            { return g_vop[o/4]; }
@@ -52,10 +52,10 @@ static void hold_regs(void)
     g_gpio2[1] |= (1u<<5);
     g_gpio2[0] |= (1u<<5);
     /* MC_PHYRSTZ: keep PHY reset released */
-    g_hdmi[0x4005] = 0x01;
+    g_hdmi[(0x4005)*4] = 0x01;
     /* MC clocks/reset */
-    g_hdmi[0x4001] = 0x00;
-    g_hdmi[0x4002] = 0xff;
+    g_hdmi[(0x4001)*4] = 0x00;
+    g_hdmi[(0x4002)*4] = 0xff;
 }
 
 struct mpll_reg { uint8_t addr; uint16_t val; };
@@ -181,7 +181,7 @@ int main(void)
         if ((i%50)==0||(stat&0x12))
             printf("    [%3dms] STAT=%02x IH=%02x CON20=%08x HPD=%d MC_PHYRSTZ=%02x%s%s\n",
                 i*10, stat, ih, g_viogrf[0x0250/4],
-                (gpio4>>23)&1, g_hdmi[0x4005],
+                (gpio4>>23)&1, g_hdmi[(0x4005)*4],
                 (stat&0x10)?" LOCKED":"",
                 (stat&0x02)?" HPD_PHY":"");
         if (stat&0x10) break;

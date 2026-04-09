@@ -55,13 +55,13 @@ int main(void)
     printf("  After write 0x55: PHY[0x06] = 0x%02x\n", phy[0x06]);
     phy[0x06] = 0x00;   /* restore */
 
-    printf("\nDW-HDMI PHY_CONF0 [0x3000] = 0x%02x\n", hdmi[0x3000]);
-    printf("DW-HDMI PHY_STAT0 [0x3004] = 0x%02x\n", hdmi[0x3004]);
+    printf("\nDW-HDMI PHY_CONF0 [0x3000] = 0x%02x\n", hdmi[(0x3000)*4]);
+    printf("DW-HDMI PHY_STAT0 [0x3004] = 0x%02x\n", hdmi[(0x3004)*4]);
 
     /* Release HDMI soft reset so PHY MMIO is accessible */
     printf("\nReleasing HDMI soft reset...\n");
-    hdmi[0x4001] = 0x00;
-    hdmi[0x4002] = 0xff;
+    hdmi[(0x4001)*4] = 0x00;
+    hdmi[(0x4002)*4] = 0xff;
     usleep(5000);
 
     printf("PHY MMIO after reset release [0xff9e0000..0x0f]:\n  ");

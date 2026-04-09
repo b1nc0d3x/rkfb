@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2026 Kyle T. Crenshaw
+ * Copyright (c) 2026 B1nc0d3x
  * All rights reserved.
  *
  * RK3399 / RockPro64 VOP framebuffer + HDMI bring-up driver.
@@ -57,17 +57,12 @@ struct rkfb_softc {
         struct cdev            *cdev;
 
         struct resource        *vop_res;
-        bus_space_tag_t         vop_bst;
-        bus_space_handle_t      vop_bsh;
-
-        bus_space_tag_t         hdmi_bst;
-        bus_space_handle_t      hdmi_bsh;
-        bus_space_tag_t         grf_bst;
-        bus_space_handle_t      grf_bsh;
-        bus_space_tag_t         cru_bst;
-        bus_space_handle_t      cru_bsh;
-        bus_space_tag_t         viogrf_bst;
-        bus_space_handle_t      viogrf_bsh;
+        vm_offset_t             vop_va;
+        vm_size_t               vop_map_size;
+        vm_offset_t             hdmi_va;
+        vm_offset_t             grf_va;
+        vm_offset_t             cru_va;
+        vm_offset_t             viogrf_va;
 
         vm_offset_t             fb_va;
         vm_paddr_t              fb_pa;
@@ -81,32 +76,37 @@ struct rkfb_softc {
         struct mtx              mtx;
 };
 
-#define VOP_READ4(sc, o)       bus_space_read_4((sc)->vop_bst,  (sc)->vop_bsh,  (o))
-#define VOP_WRITE4(sc, o, v)   bus_space_write_4((sc)->vop_bst, (sc)->vop_bsh,  (o), (v))
-#define GRF_READ4(sc, o)       bus_space_read_4((sc)->grf_bst,    (sc)->grf_bsh,    (o))
-#define GRF_WRITE4(sc, o, v)   bus_space_write_4((sc)->grf_bst,   (sc)->grf_bsh,    (o), (v))
-#define CRU_READ4(sc, o)       bus_space_read_4((sc)->cru_bst,    (sc)->cru_bsh,    (o))
-#define CRU_WRITE4(sc, o, v)   bus_space_write_4((sc)->cru_bst,   (sc)->cru_bsh,    (o), (v))
-#define VIOGRF_READ4(sc, o)    bus_space_read_4((sc)->viogrf_bst, (sc)->viogrf_bsh, (o))
-#define VIOGRF_WRITE4(sc, o, v) bus_space_write_4((sc)->viogrf_bst,(sc)->viogrf_bsh,(o), (v))
+#define MMIO_READ4(base, off) \
+        (*(volatile uint32_t *)((base) + (off)))
+#define MMIO_WRITE4(base, off, val) do { \
+        (*(volatile uint32_t *)((base) + (off)) = (uint32_t)(val)); \
+        __asm volatile("dsb sy" ::: "memory"); \
+} while (0)
+#define MMIO_READ1(base, off) \
+        (*(volatile uint8_t *)((base) + (off)))
+
+#define VOP_READ4(sc, o)        MMIO_READ4((sc)->vop_va, (o))
+#define VOP_WRITE4(sc, o, v)    MMIO_WRITE4((sc)->vop_va, (o), (v))
+#define GRF_READ4(sc, o)        MMIO_READ4((sc)->grf_va, (o))
+#define GRF_WRITE4(sc, o, v)    MMIO_WRITE4((sc)->grf_va, (o), (v))
+#define CRU_READ4(sc, o)        MMIO_READ4((sc)->cru_va, (o))
+#define CRU_WRITE4(sc, o, v)    MMIO_WRITE4((sc)->cru_va, (o), (v))
+#define VIOGRF_READ4(sc, o)     MMIO_READ4((sc)->viogrf_va, (o))
+#define VIOGRF_WRITE4(sc, o, v) MMIO_WRITE4((sc)->viogrf_va, (o), (v))
 /*
  * DW-HDMI on RK3399 uses 4-byte register stride.
- * Physical byte offset = logical register address * 4.
- *
- * Reads: byte reads (LDRB) work fine via the APB bridge.
- * Writes: use 32-bit word writes (STR) — the RK3399 APB bridge does not
- *         support byte write strobes (PSTRB) for HDMI, causing PSLVERR
- *         on STRB. The register value sits in bits[7:0] of the 32-bit word.
+ * Reads use byte semantics at reg*4. Writes must be 32-bit with the value in
+ * bits[7:0] to avoid APB byte-strobe faults.
  */
-#define HDMI_READ1(sc, o)      bus_space_read_1((sc)->hdmi_bst, (sc)->hdmi_bsh, (o)*4)
-#define HDMI_WRITE1(sc, o, v)  bus_space_write_4((sc)->hdmi_bst,(sc)->hdmi_bsh, (o)*4, (uint8_t)(v))
+#define HDMI_READ1(sc, o)       MMIO_READ1((sc)->hdmi_va, (o) * 4)
+#define HDMI_WRITE1(sc, o, v)   MMIO_WRITE4((sc)->hdmi_va, (o) * 4, (uint8_t)(v))
 
 static int
 rkfb_vop_write_allowed(uint32_t off)
 {
         switch (off) {
         /* System / global */
-        case 0x0000: case 0x0008: case 0x0010:
+        case 0x0000: case 0x0004: case 0x0008: case 0x0010:
         /* WIN0 */
         case 0x0030: case 0x003c: case 0x0040: case 0x0048:
         case 0x004c: case 0x0050:
@@ -382,40 +382,28 @@ rkfb_attach(device_t dev)
                 device_printf(dev, "cannot map VOP\n");
                 error = ENXIO; goto fail_mtx;
         }
-        sc->vop_bst = rman_get_bustag(sc->vop_res);
-        sc->vop_bsh = rman_get_bushandle(sc->vop_res);
-        device_printf(dev, "VOP[0x0008]=0x%08x\n", VOP_READ4(sc, 0x0008));
-
-        error = bus_space_map(rman_get_bustag(sc->vop_res), RKFB_GRF_PA,
-            RKFB_GRF_SIZE, 0, &sc->grf_bsh);
-        if (error) { device_printf(dev, "cannot map GRF\n"); goto fail_vop; }
-        sc->grf_bst = rman_get_bustag(sc->vop_res);
-
-        error = bus_space_map(rman_get_bustag(sc->vop_res), RKFB_CRU_PA,
-            RKFB_CRU_SIZE, 0, &sc->cru_bsh);
-        if (error) { device_printf(dev, "cannot map CRU\n"); goto fail_grf; }
-        sc->cru_bst = rman_get_bustag(sc->vop_res);
-
-        error = bus_space_map(rman_get_bustag(sc->vop_res), RKFB_VIOGRF_PA,
-            RKFB_VIOGRF_SIZE, 0, &sc->viogrf_bsh);
-        if (error) { device_printf(dev, "cannot map VIO GRF\n"); goto fail_cru; }
-        sc->viogrf_bst = rman_get_bustag(sc->vop_res);
-
-        /*error = bus_space_map(rman_get_bustag(sc->vop_res), RKFB_HDMI_PA,
-            RKFB_HDMI_SIZE, BUS_SPACE_MAP_NONPOSTED, &sc->hdmi_bsh);
-        if (error) { device_printf(dev, "cannot map HDMI\n"); goto fail_cru; }
-        sc->hdmi_bst = rman_get_bustag(sc->vop_res);*/
-
-        error = bus_space_map(rman_get_bustag(sc->vop_res), RKFB_HDMI_PA,
-            RKFB_HDMI_SIZE, 0, &sc->hdmi_bsh);
-        if (error) {
-                device_printf(dev, "cannot map HDMI\n");
+        sc->vop_map_size = (vm_size_t)rman_get_size(sc->vop_res);
+        sc->vop_va = (vm_offset_t)pmap_mapdev((vm_paddr_t)rman_get_start(sc->vop_res),
+            sc->vop_map_size);
+        if (sc->vop_va == 0) {
+                device_printf(dev, "cannot pmap VOP\n");
+                error = ENXIO; goto fail_vop;
+        }
+        sc->grf_va = (vm_offset_t)pmap_mapdev((vm_paddr_t)RKFB_GRF_PA, RKFB_GRF_SIZE);
+        if (sc->grf_va == 0) { device_printf(dev, "cannot pmap GRF\n"); error = ENXIO; goto fail_vopmap; }
+        sc->cru_va = (vm_offset_t)pmap_mapdev((vm_paddr_t)RKFB_CRU_PA, RKFB_CRU_SIZE);
+        if (sc->cru_va == 0) { device_printf(dev, "cannot pmap CRU\n"); error = ENXIO; goto fail_grf; }
+        sc->viogrf_va = (vm_offset_t)pmap_mapdev((vm_paddr_t)RKFB_VIOGRF_PA, RKFB_VIOGRF_SIZE);
+        if (sc->viogrf_va == 0) { device_printf(dev, "cannot pmap VIO GRF\n"); error = ENXIO; goto fail_cru; }
+        sc->hdmi_va = (vm_offset_t)pmap_mapdev((vm_paddr_t)RKFB_HDMI_PA, RKFB_HDMI_SIZE);
+        if (sc->hdmi_va == 0) {
+                device_printf(dev, "cannot pmap HDMI\n");
+                error = ENXIO;
                 goto fail_viogrf;
         }
-        sc->hdmi_bst = rman_get_bustag(sc->vop_res);
 
-
-	device_printf(dev, "HDMI mapped\n");
+        device_printf(dev, "VOP[0x0008]=0x%08x\n", VOP_READ4(sc, 0x0008));
+        device_printf(dev, "HDMI mapped\n");
         /*device_printf(dev, "HDMI design_id=0x%02x rev=0x%02x "
             "MC_SWRSTZREQ=0x%02x PHY_STAT0=0x%02x\n",
             HDMI_READ1(sc, 0x0000), HDMI_READ1(sc, 0x0004),
@@ -444,10 +432,11 @@ rkfb_attach(device_t dev)
         return (0);
 
 fail_fb:      kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
-fail_hdmi:    bus_space_unmap(sc->hdmi_bst, sc->hdmi_bsh, RKFB_HDMI_SIZE);
-fail_viogrf:  bus_space_unmap(sc->viogrf_bst, sc->viogrf_bsh, RKFB_VIOGRF_SIZE);
-fail_cru:     bus_space_unmap(sc->cru_bst,    sc->cru_bsh,    RKFB_CRU_SIZE);
-fail_grf:     bus_space_unmap(sc->grf_bst,    sc->grf_bsh,    RKFB_GRF_SIZE);
+fail_hdmi:    pmap_unmapdev((void *)sc->hdmi_va, RKFB_HDMI_SIZE);
+fail_viogrf:  pmap_unmapdev((void *)sc->viogrf_va, RKFB_VIOGRF_SIZE);
+fail_cru:     pmap_unmapdev((void *)sc->cru_va, RKFB_CRU_SIZE);
+fail_grf:     pmap_unmapdev((void *)sc->grf_va, RKFB_GRF_SIZE);
+fail_vopmap:  pmap_unmapdev((void *)sc->vop_va, sc->vop_map_size);
 fail_vop:     bus_release_resource(dev, SYS_RES_MEMORY, 0, sc->vop_res);
 fail_mtx:     mtx_destroy(&sc->mtx);
         return (error);
@@ -459,13 +448,11 @@ rkfb_detach(device_t dev)
         struct rkfb_softc *sc = device_get_softc(dev);
         if (sc->cdev   != NULL) destroy_dev(sc->cdev);
         if (sc->fb_va  != 0)    kmem_free((void *)sc->fb_va, round_page(sc->fb_size));
-        //if (sc->hdmi_bsh != 0)  bus_space_unmap(sc->hdmi_bst, sc->hdmi_bsh, RKFB_HDMI_SIZE);
-        
-        if (sc->hdmi_bsh != 0)
-                bus_space_unmap(sc->hdmi_bst, sc->hdmi_bsh, RKFB_HDMI_SIZE);
-        if (sc->viogrf_bsh != 0) bus_space_unmap(sc->viogrf_bst, sc->viogrf_bsh, RKFB_VIOGRF_SIZE);
-	if (sc->cru_bsh  != 0)  bus_space_unmap(sc->cru_bst,  sc->cru_bsh,  RKFB_CRU_SIZE);
-        if (sc->grf_bsh  != 0)  bus_space_unmap(sc->grf_bst,  sc->grf_bsh,  RKFB_GRF_SIZE);
+        if (sc->hdmi_va != 0)    pmap_unmapdev((void *)sc->hdmi_va, RKFB_HDMI_SIZE);
+        if (sc->viogrf_va != 0)  pmap_unmapdev((void *)sc->viogrf_va, RKFB_VIOGRF_SIZE);
+        if (sc->cru_va != 0)     pmap_unmapdev((void *)sc->cru_va, RKFB_CRU_SIZE);
+        if (sc->grf_va != 0)     pmap_unmapdev((void *)sc->grf_va, RKFB_GRF_SIZE);
+        if (sc->vop_va != 0)     pmap_unmapdev((void *)sc->vop_va, sc->vop_map_size);
         if (sc->vop_res  != NULL) bus_release_resource(dev, SYS_RES_MEMORY, 0, sc->vop_res);
         mtx_destroy(&sc->mtx);
         return (0);

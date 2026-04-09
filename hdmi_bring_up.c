@@ -24,8 +24,8 @@ static volatile uint32_t *g_viogrf;
 static volatile uint32_t *g_vop;
 static volatile uint8_t  *g_hdmi;
 
-static inline uint8_t  hr(uint32_t o)              { return g_hdmi[o]; }
-static inline void     hw(uint32_t o, uint8_t v)    { g_hdmi[o] = v; }
+static inline uint8_t  hr(uint32_t o)              { return g_hdmi[(o)*4]; }
+static inline void     hw(uint32_t o, uint8_t v)    { g_hdmi[(o)*4] = v; }
 static inline uint32_t cru_r(uint32_t o)            { return g_cru[o/4]; }
 static inline void     cru_hw(uint32_t o, uint32_t mask, uint32_t val)
 { g_cru[o/4] = (mask<<16)|(val&mask); }
@@ -99,9 +99,9 @@ int main(void)
     printf("    SYS_CTRL          = 0x%08x (bit1=1 bit11=0 wanted)\n", vop_r(0x0008));
 
     /* === PHASE 3: VIO GRF mux === */
-    printf("\n[3] VIO GRF: VOPB->HDMI\n");
+    printf("\n[3] VIO GRF: bsd harbor route\n");
     g_viogrf[0x0250/4] = (1u<<22)|(1u<<6);
-    printf("    SOC_CON20 = 0x%08x (bit6=1 wanted)\n", g_viogrf[0x0250/4]);
+    printf("    SOC_CON20 = 0x%08x (bit6=0 wanted)\n", g_viogrf[0x0250/4]);
 
     /* === PHASE 4: HDMI MC init === */
     printf("\n[4] HDMI MC clocks + reset\n");

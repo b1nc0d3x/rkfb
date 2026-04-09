@@ -25,38 +25,38 @@ int main(void) {
     printf("-- HDMI ALL KEY REGS --\n");
     /* Identification */
     printf("design_id=%02x rev=%02x prod=%02x%02x cfg=%02x%02x%02x\n",
-        hdmi[0],hdmi[4],hdmi[8],hdmi[0xc],hdmi[0x10],hdmi[0x14],hdmi[0x18]);
+        hdmi[(0)*4],hdmi[(4)*4],hdmi[(8)*4],hdmi[(0xc)*4],hdmi[(0x10)*4],hdmi[(0x14)*4],hdmi[(0x18)*4]);
     /* Main controller */
     printf("MC: CLKDIS=%02x SWRSTZ=%02x OPCTRL=%02x FLOWCTRL=%02x PHYRSTZ=%02x LOCKONCLOCK=%02x\n",
-        hdmi[0x4001],hdmi[0x4002],hdmi[0x4003],hdmi[0x4004],hdmi[0x4005],hdmi[0x4006]);
+        hdmi[(0x4001)*4],hdmi[(0x4002)*4],hdmi[(0x4003)*4],hdmi[(0x4004)*4],hdmi[(0x4005)*4],hdmi[(0x4006)*4]);
     /* PHY */
     printf("PHY: CONF0=%02x STAT0=%02x TST0=%02x\n",
-        hdmi[0x3000],hdmi[0x3004],hdmi[0x3001]);
+        hdmi[(0x3000)*4],hdmi[(0x3004)*4],hdmi[(0x3001)*4]);
     printf("PHY_I2CM: SLAVE=%02x ADDR=%02x OP=%02x INT=%02x DIV=%02x\n",
-        hdmi[0x3020],hdmi[0x3021],hdmi[0x3026],hdmi[0x3027],hdmi[0x3029]);
+        hdmi[(0x3020)*4],hdmi[(0x3021)*4],hdmi[(0x3026)*4],hdmi[(0x3027)*4],hdmi[(0x3029)*4]);
     /* Frame composer */
     printf("FC: INVIDCONF=%02x HACT=%02x%02x VACT=%02x%02x\n",
-        hdmi[0x1000],hdmi[0x1002],hdmi[0x1001],hdmi[0x1006],hdmi[0x1005]);
+        hdmi[(0x1000)*4],hdmi[(0x1002)*4],hdmi[(0x1001)*4],hdmi[(0x1006)*4],hdmi[(0x1005)*4]);
     printf("FC: HBLANK=%02x%02x VBLANK=%02x\n",
-        hdmi[0x1004],hdmi[0x1003],hdmi[0x1007]);
+        hdmi[(0x1004)*4],hdmi[(0x1003)*4],hdmi[(0x1007)*4]);
     printf("FC: HSYNC_DLY=%02x%02x HSYNC_WID=%02x%02x\n",
-        hdmi[0x1009],hdmi[0x1008],hdmi[0x100b],hdmi[0x100a]);
-    printf("FC: VSYNC_DLY=%02x VSYNC_WID=%02x\n",hdmi[0x100c],hdmi[0x100d]);
+        hdmi[(0x1009)*4],hdmi[(0x1008)*4],hdmi[(0x100b)*4],hdmi[(0x100a)*4]);
+    printf("FC: VSYNC_DLY=%02x VSYNC_WID=%02x\n",hdmi[(0x100c)*4],hdmi[(0x100d)*4]);
     printf("FC: AVICONF=%02x%02x%02x VID=%02x\n",
-        hdmi[0x1017],hdmi[0x1018],hdmi[0x1019],hdmi[0x101b]);
+        hdmi[(0x1017)*4],hdmi[(0x1018)*4],hdmi[(0x1019)*4],hdmi[(0x101b)*4]);
     /* Video packetizer */
     printf("VP: STATUS=%02x PR_CD=%02x CONF=%02x\n",
-        hdmi[0x0800],hdmi[0x0801],hdmi[0x0804]);
+        hdmi[(0x0800)*4],hdmi[(0x0801)*4],hdmi[(0x0804)*4]);
     /* Interrupts */
     printf("IH: PHY=%02x MUTE_PHY=%02x MUTE=%02x\n",
-        hdmi[0x0104],hdmi[0x0184],hdmi[0x01ff]);
+        hdmi[(0x0104)*4],hdmi[(0x0184)*4],hdmi[(0x01ff)*4]);
     /* Dump 0x3000-0x302f (PHY interface) */
     printf("PHY_IF[0x3000-0x302f]:");
-    for(int i=0;i<0x30;i++) printf(" %02x",hdmi[0x3000+i]);
+    for(int i=0;i<0x30;i++) printf(" %02x",hdmi[(0x3000+i)*4]);
     printf("\n");
     /* Dump 0x4000-0x400f (MC) */
     printf("MC[0x4000-0x400f]:");
-    for(int i=0;i<0x10;i++) printf(" %02x",hdmi[0x4000+i]);
+    for(int i=0;i<0x10;i++) printf(" %02x",hdmi[(0x4000+i)*4]);
     printf("\n");
 
     printf("\n-- CRU --\n");

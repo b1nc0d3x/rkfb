@@ -77,7 +77,7 @@ static int phy_i2c_write(uint8_t reg, uint16_t val)
 static void hold_regs(void)
 {
     cru_hw(0x00c4,(3u<<8)|0xffu,(1u<<8)|0x07u); /* GPLL/8=74.25MHz */
-    g_viogrf[0x0250/4] = (0x00ffu<<16)|0x0040u; /* VOPB->HDMI */
+    g_viogrf[0x0250/4] = (0x00ffu<<16)|0x0000u; /* bsd harbor route */
     g_grf[0x010c/4] = (0xfc00u<<16)|0x5400u;    /* GPIO4C HPD+SDA+SCL */
     g_gpio2[1] |= (1u<<5); g_gpio2[0] |= (1u<<5); /* avdd enable */
     HW(0x4005, 0x01);    /* MC_PHYRSTZ: released */
@@ -129,7 +129,7 @@ int main(void)
     /* 4: Pinmux + mux */
     printf("\n[4] Pinmux + VIO GRF\n");
     g_grf[0x010c/4]   = (0xfc00u<<16)|0x5400u;
-    g_viogrf[0x0250/4]= (0x00ffu<<16)|0x0040u;
+    g_viogrf[0x0250/4]= (0x00ffu<<16)|0x0000u;
     printf("    GPIO4C_IOMUX = 0x%08x HPD=%d\n",
         g_grf[0x010c/4], (g_grf[0x010c/4]>>14)&3);
     printf("    SOC_CON20    = 0x%08x bit6=%d\n",

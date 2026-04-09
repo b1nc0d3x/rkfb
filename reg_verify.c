@@ -46,18 +46,18 @@ int main(void)
 
 	/* Test 2: HDMI MC_PHYRSTZ - kernel HDMI driver may own this */
 	printf("=== Test 2: HDMI MC_PHYRSTZ [0x4005] ===\n");
-	printf("Before: 0x%02x\n", hdmi[0x4005]);
-	hdmi[0x4001] = 0x00;  /* MC_CLKDIS: all on */
-	hdmi[0x4002] = 0xff;  /* MC_SWRSTZREQ: all released */
+	printf("Before: 0x%02x\n", hdmi[(0x4005)*4]);
+	hdmi[(0x4001)*4] = 0x00;  /* MC_CLKDIS: all on */
+	hdmi[(0x4002)*4] = 0xff;  /* MC_SWRSTZREQ: all released */
 	usleep(5000);
-	hdmi[0x4005] = 0x01;
-	printf("After write (immediate): 0x%02x\n", hdmi[0x4005]);
+	hdmi[(0x4005)*4] = 0x01;
+	printf("After write (immediate): 0x%02x\n", hdmi[(0x4005)*4]);
 	usleep(10000);
-	printf("After 10ms:              0x%02x\n", hdmi[0x4005]);
+	printf("After 10ms:              0x%02x\n", hdmi[(0x4005)*4]);
 	usleep(100000);
-	printf("After 100ms:             0x%02x\n", hdmi[0x4005]);
+	printf("After 100ms:             0x%02x\n", hdmi[(0x4005)*4]);
 	usleep(1000000);
-	printf("After 1s:                0x%02x  (want 0x01)\n\n", hdmi[0x4005]);
+	printf("After 1s:                0x%02x  (want 0x01)\n\n", hdmi[(0x4005)*4]);
 
 	/* Test 3: VOP SYS_CTRL - read live value after REG_CFG_DONE */
 	printf("=== Test 3: VOP SYS_CTRL bit1 (hdmi_dclk_en) ===\n");
@@ -81,18 +81,18 @@ int main(void)
 	/* Test 4: Does HDMI MC_PHYRSTZ readback even work? */
 	/* Write known pattern to a writable HDMI reg and see if it sticks */
 	printf("=== Test 4: HDMI PHY_CONF0 [0x3000] write persistence ===\n");
-	printf("Before: 0x%02x\n", hdmi[0x3000]);
-	hdmi[0x3000] = 0xd2;
-	printf("After write (immediate): 0x%02x\n", hdmi[0x3000]);
+	printf("Before: 0x%02x\n", hdmi[(0x3000)*4]);
+	hdmi[(0x3000)*4] = 0xd2;
+	printf("After write (immediate): 0x%02x\n", hdmi[(0x3000)*4]);
 	usleep(10000);
-	printf("After 10ms:              0x%02x\n", hdmi[0x3000]);
-	hdmi[0x4005] = 0x01;
-	printf("MC_PHYRSTZ after write:  0x%02x\n", hdmi[0x4005]);
+	printf("After 10ms:              0x%02x\n", hdmi[(0x3000)*4]);
+	hdmi[(0x4005)*4] = 0x01;
+	printf("MC_PHYRSTZ after write:  0x%02x\n", hdmi[(0x4005)*4]);
 	usleep(10000);
-	printf("MC_PHYRSTZ after 10ms:   0x%02x\n", hdmi[0x4005]);
+	printf("MC_PHYRSTZ after 10ms:   0x%02x\n", hdmi[(0x4005)*4]);
 	usleep(100000);
 	printf("MC_PHYRSTZ after 100ms:  0x%02x  (if 0x00, kernel is resetting it)\n",
-	    hdmi[0x4005]);
+	    hdmi[(0x4005)*4]);
 
 	close(fd);
 	return 0;

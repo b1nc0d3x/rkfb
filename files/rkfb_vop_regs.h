@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2026 Kyle T. Crenshaw
+ * Copyright (c) 2026 B1nc0d3x
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

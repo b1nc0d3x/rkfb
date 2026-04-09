@@ -16,15 +16,15 @@ int main(void){
     printf("=== WORKING STATE SNAPSHOT ===\n\n");
 
     printf("-- HDMI --\n");
-    printf("MC_CLKDIS    [0x4001] = 0x%02x\n", hdmi[0x4001]);
-    printf("MC_SWRSTZREQ [0x4002] = 0x%02x\n", hdmi[0x4002]);
-    printf("MC_PHYRSTZ   [0x4005] = 0x%02x\n", hdmi[0x4005]);
-    printf("MC_LOCKONCLOCK[0x4006]= 0x%02x\n", hdmi[0x4006]);
-    printf("PHY_CONF0    [0x3000] = 0x%02x\n", hdmi[0x3000]);
-    printf("PHY_STAT0    [0x3004] = 0x%02x\n", hdmi[0x3004]);
-    printf("IH_PHY_STAT0 [0x0104] = 0x%02x\n", hdmi[0x0104]);
-    printf("FC_INVIDCONF [0x1000] = 0x%02x\n", hdmi[0x1000]);
-    printf("VP_CONF      [0x0804] = 0x%02x\n", hdmi[0x0804]);
+    printf("MC_CLKDIS    [0x4001] = 0x%02x\n", hdmi[(0x4001)*4]);
+    printf("MC_SWRSTZREQ [0x4002] = 0x%02x\n", hdmi[(0x4002)*4]);
+    printf("MC_PHYRSTZ   [0x4005] = 0x%02x\n", hdmi[(0x4005)*4]);
+    printf("MC_LOCKONCLOCK[0x4006]= 0x%02x\n", hdmi[(0x4006)*4]);
+    printf("PHY_CONF0    [0x3000] = 0x%02x\n", hdmi[(0x3000)*4]);
+    printf("PHY_STAT0    [0x3004] = 0x%02x\n", hdmi[(0x3004)*4]);
+    printf("IH_PHY_STAT0 [0x0104] = 0x%02x\n", hdmi[(0x0104)*4]);
+    printf("FC_INVIDCONF [0x1000] = 0x%02x\n", hdmi[(0x1000)*4]);
+    printf("VP_CONF      [0x0804] = 0x%02x\n", hdmi[(0x0804)*4]);
 
     printf("\n-- CRU --\n");
     printf("VPLL CON0-3: %08x %08x %08x %08x\n",

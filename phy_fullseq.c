@@ -38,8 +38,8 @@ static volatile uint32_t *g_cru;
 static volatile uint32_t *g_viogrf;
 static volatile uint32_t *g_vop;
 
-static inline uint8_t  hr(uint32_t o)              { return g_hdmi[o]; }
-static inline void     hw(uint32_t o, uint8_t v)    { g_hdmi[o] = v; }
+static inline uint8_t  hr(uint32_t o)              { return g_hdmi[(o)*4]; }
+static inline void     hw(uint32_t o, uint8_t v)    { g_hdmi[(o)*4] = v; }
 static inline uint32_t cru_r(uint32_t o)            { return g_cru[o/4]; }
 static inline void     cru_w(uint32_t o, uint32_t v){ g_cru[o/4] = v; }
 static inline uint32_t vop_r(uint32_t o)            { return g_vop[o/4]; }
@@ -114,8 +114,9 @@ main(void)
 	printf("     GPLL CON2 = 0x%08x (locked=%d)\n",
 	    cru_r(0x0088), (cru_r(0x0088)>>31)&1);
 	printf("     CLKSEL49 before: 0x%08x\n", cru_r(0x00c4));
-	cru_hiword(0x00c4, (3u<<8)|0xffu, (1u<<8)|0x07u);
-	printf("     CLKSEL49 after:  0x%08x  (want bits[9:0]=0x107)\n", cru_r(0x00c4));
+	/* mux=10=GPLL (594MHz), div=7 → 74.25MHz. Mux encoding: 0=VPLL,1=CPLL,2=GPLL,3=PPLL */
+	cru_w(0x00c4, 0x00002608);
+	printf("     CLKSEL49 after:  0x%08x  (forced to saved working value 0x00002608)\n", cru_r(0x00c4));
 
 
 	/* ---- 0c: VOP dclk enable, clear standby ----------------------- */
@@ -177,9 +178,9 @@ main(void)
 	hw(0x3000, 0xe2);   /* step1: PDZ|ENTMDS|SPARECTRL|SELDATAENPOL */
 	usleep(5000);
 	printf("    Step1 PHY_CONF0=0x%02x (want 0xe2)\n", hr(0x3000));
-	hw(0x3000, 0xf2);   /* step2: add GEN2_TXPWRON */
+	hw(0x3000, 0xf3);   /* step2: add GEN2_TXPWRON + ENHPDRXSENSE(bit0) */
 	usleep(2000);
-	printf("    Step2 PHY_CONF0=0x%02x (want 0xf2)\n", hr(0x3000));
+	printf("    Step2 PHY_CONF0=0x%02x (want 0xf3)\n", hr(0x3000));
 
 	/* ---- 7: Release PHY reset ------------------------------------- */
 	printf("\n[7] Release PHY reset...\n");

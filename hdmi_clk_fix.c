@@ -117,8 +117,8 @@ int main(void)
 	usleep(5000);
 
 	/* Release HDMI soft resets */
-	hdmi[0x4001] = 0x00;   /* MC_CLKDIS: all on */
-	hdmi[0x4002] = 0xff;   /* MC_SWRSTZREQ: release */
+	hdmi[(0x4001)*4] = 0x00;   /* MC_CLKDIS: all on */
+	hdmi[(0x4002)*4] = 0xff;   /* MC_SWRSTZREQ: release */
 	usleep(10000);
 
 	/* ---- 5: Verify -------------------------------------------- */
@@ -128,9 +128,9 @@ int main(void)
 	SHOW_RST(0x0414,   9, "srst_p_hdmi_ctrl");
 	SHOW_RST(0x0414,  10, "srst_hdmi_ctrl");
 
-	printf("\n    MC_LOCKONCLOCK [0x4006] = 0x%02x\n", hdmi[0x4006]);
+	printf("\n    MC_LOCKONCLOCK [0x4006] = 0x%02x\n", hdmi[(0x4006)*4]);
 	{
-		uint8_t loc = hdmi[0x4006];
+		uint8_t loc = hdmi[(0x4006)*4];
 		printf("      bit5 sfrclk   = %d\n", (loc>>5)&1);
 		printf("      bit2 pixelclk = %d  %s\n", (loc>>2)&1,
 		    (loc>>2)&1 ? "(pixel clock present!)" : "(still absent)");
@@ -138,8 +138,8 @@ int main(void)
 		    (loc>>0)&1 ? "(APB clock present!)" : "(still absent)");
 	}
 
-	printf("    MC_SWRSTZREQ   [0x4002] = 0x%02x\n", hdmi[0x4002]);
-	printf("    PHY_STAT0      [0x3004] = 0x%02x\n", hdmi[0x3004]);
+	printf("    MC_SWRSTZREQ   [0x4002] = 0x%02x\n", hdmi[(0x4002)*4]);
+	printf("    PHY_STAT0      [0x3004] = 0x%02x\n", hdmi[(0x3004)*4]);
 
 	close(fd);
 	return 0;
