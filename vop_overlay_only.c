@@ -46,11 +46,14 @@ main(void)
         vio[0x0250 / 4] = (0x00ffu << 16) | 0x0000u;
 
         /* 720p60 timing + framebuffer scanout */
+        vop[0x000c / 4] = 0x0003a000;
         vop[0x0010 / 4] = 0x00000000;
-        vop[0x0188 / 4] = 0x06710027;
-        vop[0x018c / 4] = 0x01040604;
-        vop[0x0190 / 4] = 0x02ed0004;
-        vop[0x0194 / 4] = 0x001902e9;
+        vop[0x0014 / 4] = 0x0000e400;
+        vop[0x0018 / 4] = 0x00000000;
+        vop[0x01a0 / 4] = 0x06710027;
+        vop[0x01a4 / 4] = 0x01040604;
+        vop[0x01a8 / 4] = 0x02ed0004;
+        vop[0x01ac / 4] = 0x001902e9;
         vop[0x003c / 4] = 0x05000500;
         vop[0x0040 / 4] = (uint32_t)(info.fb_pa & 0xffffffffu);
         vop[0x0048 / 4] = 0x02cf04ff;

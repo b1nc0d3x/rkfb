@@ -1,0 +1,74 @@
+Linux source references used for rkfb driver work
+===============================================
+
+License scope used:
+- GPLv2 Linux kernel source files only
+- No non-GPL Linux material was intentionally used for driver behavior/reference work
+
+Files referenced
+----------------
+
+1. drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+   URL:
+   https://raw.githubusercontent.com/torvalds/linux/master/drivers/gpu/drm/rockchip/dw_hdmi-rockchip.c
+   Purpose:
+   - RK3399 HDMI route selection
+   - HDMI PHY/pixel clock bring-up behavior
+   - RK3399 HDMI mux expectations
+
+2. drivers/pmdomain/rockchip/pm-domains.c
+   URL:
+   https://raw.githubusercontent.com/torvalds/linux/master/drivers/pmdomain/rockchip/pm-domains.c
+   Purpose:
+   - RK3399 PMU power-domain offsets
+   - VIO / display-domain idle and power-state checks
+
+3. drivers/clk/rockchip/clk-rk3399.c
+   URL:
+   https://raw.githubusercontent.com/torvalds/linux/master/drivers/clk/rockchip/clk-rk3399.c
+   Purpose:
+   - RK3399 display/HDMI clock tree
+   - CLKGATE and CLKSEL relationships for VIO / VOP / HDMI
+   - parent clock and divider interpretation
+
+4. include/dt-bindings/power/rk3399-power.h
+   URL:
+   https://raw.githubusercontent.com/torvalds/linux/master/include/dt-bindings/power/rk3399-power.h
+   Purpose:
+   - RK3399 power-domain IDs used while tracing PMU state
+
+5. include/dt-bindings/clock/rk3399-cru.h
+   URL:
+   https://raw.githubusercontent.com/torvalds/linux/master/include/dt-bindings/clock/rk3399-cru.h
+   Purpose:
+   - RK3399 reset and clock IDs
+   - identifying display-related reset lines
+
+6. drivers/gpu/drm/rockchip/rockchip_vop_reg.c
+   URL:
+   https://raw.githubusercontent.com/torvalds/linux/master/drivers/gpu/drm/rockchip/rockchip_vop_reg.c
+   Purpose:
+   - RK3399 VOP common/output register layout
+   - SYS_CTRL, DSP_CTRL, timing, and output enable semantics
+   - identifying missing common-register programming
+
+7. drivers/gpu/drm/rockchip/rockchip_vop_reg.h
+   URL:
+   https://raw.githubusercontent.com/torvalds/linux/master/drivers/gpu/drm/rockchip/rockchip_vop_reg.h
+   Purpose:
+   - RK3399 VOP register offsets
+   - corrected timing, interrupt, status, and line-flag register map
+
+8. drivers/gpu/drm/rockchip/rockchip_drm_vop.h
+   URL:
+   https://raw.githubusercontent.com/torvalds/linux/master/drivers/gpu/drm/rockchip/rockchip_drm_vop.h
+   Purpose:
+   - VOP interrupt bit definitions
+   - decoding raw/status interrupt fields during scanout debugging
+
+Notes
+-----
+- These files were used strictly as reference material while debugging and correcting
+  RK3399 display / HDMI behavior in the FreeBSD rkfb driver tree.
+- This file is intended to track Linux-source inputs used during development so
+  later cleanup/audit work can see exactly what was referenced.

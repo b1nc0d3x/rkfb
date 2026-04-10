@@ -1,0 +1,36 @@
+FreeBSD-specific issues and fixes found during rkfb driver bring-up
+=================================================================
+
+1. DW-HDMI register stride handling
+- The RK3399 DW-HDMI block requires 4-byte register stride.
+- Several direct helper tools originally treated HDMI registers as byte-stride and produced false register snapshots.
+- Fix: use reg * 4 addressing for reads, and 32-bit writes with the payload in bits[7:0].
+
+2. /dev/mem helper reliability on FreeBSD
+- Direct /dev/mem VOP helpers can produce misleading readback versus kernel bus_space/device access.
+- At least one helper sequence appeared to read back locally-written values that conflicted with separate readers.
+- Action: treat kernel bus_space/ioctl results as truth when they disagree with /dev/mem helpers.
+
+3. rkfb framebuffer allocation window
+- Unconstrained contiguous allocation produced high framebuffer physical addresses that were poor scanout candidates on this board state.
+- Fix: constrain framebuffer allocation to low physical memory in rkfb.c.
+
+4. rkfb VOP write allowlist drift
+- The ioctl write allowlist in rkfb.c needed adjustment as the VOP register map investigation changed.
+- Current RK3399 timing block uses 0x0188..0x019c, not the later-generation 0x01a0..0x01ac PWM block.
+- Fix: keep RK3399 timing offsets aligned with GPLv2 Linux rk3399 VOP definitions.
+
+5. Kernel-side VOP writes that do not stick
+- On FreeBSD, ioctl writes to WIN0_YRGB_MST still read back as the boot value 0xad400000 instead of the new framebuffer PA.
+- Timing registers now read back correctly once the true RK3399 map was restored, but WIN0_YRGB_MST still does not move.
+- This remains an unresolved FreeBSD-side driver issue under investigation.
+
+6. PHY-I2C completion path mismatch
+- Earlier helpers incorrectly treated PHY-I2C completion via 0x3027-like status handling.
+- GPLv2 DW-HDMI source shows Gen2 PHY-I2C completion should be observed through HDMI_IH_I2CMPHY_STAT0 (0x0108) and cleared there.
+- Current status after adopting that path is 0x03 (done + error), so the remaining issue is in setup/handshake rather than simple polling.
+
+7. Module attach/detach churn during reload testing
+- During repeated kldload/kldunload cycles, rkfb0 often detached and reattached quickly while the module remained loaded.
+- This complicates interpretation of live register state during rapid testing.
+- Needs stabilization or awareness during future testing.

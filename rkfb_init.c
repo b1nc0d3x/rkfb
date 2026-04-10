@@ -231,22 +231,31 @@ step1_reset_release(void)
 static void
 step2_grf_mux(void)
 {
-	printf("\n[2] GRF mux: VOPB -> HDMI...\n");
-
-	printf("    GRF_SOC_CON4 before:  0x%08x\n", reg_r(RKFB_BLOCK_GRF, 0x0410));
-	printf("    GRF_SOC_CON20 before: 0x%08x\n", reg_r(RKFB_BLOCK_GRF, 0x6250));
+	printf("\n[2] GRF mux: VOPB -> HDMI (RK3399_HDMI_LCDC_SEL bit6=1)...\n");
 
 	/*
-	 * GRF_SOC_CON20 [0x6250]: clear bit6 to feed HDMI from the BSD primary display block.
-	 * This board misbehaves if that selector is left high.
-	 *
-	 * NOTE: the 0x6250 selector lives in the expanded GRF view in this driver.
-	 *
-	reg_hiword(RKFB_BLOCK_GRF, 0x6250, (1u << 6), 0);
+	 * RK3399_HDMI_LCDC_SEL bit6: 1=VOPB, 0=VOPL
+	 * The exact register location varies by source:
+	 * - Some say VIO GRF offset 0x0050 (SOC_CON20 = word 20 * 4)
+	 * - Some say VIO GRF offset 0x0250
+	 * - Linux uses sys GRF with offset RK3399_GRF_SOC_CON20
+	 * Try both VIO GRF offsets; sys GRF is also tried via RKFB_BLOCK_GRF.
+	 */
+	/*
+	 * Try all known locations for HDMI_LCDC_SEL (VOPB=1 / VOPL=0):
+	 *   - VIO GRF (0xFF770000) offset 0x0050  (VIO_GRF_SOC_CON20 = 20*4)
+	 *   - SYS GRF (0xFF320000) offset 0x6250  (RK3399_GRF_SOC_CON20 from Linux)
+	 * Linux dw_hdmi-rockchip.c uses the SYS GRF via rockchip,grf phandle.
+	 */
+	printf("    VIO GRF[0x0050] before: 0x%08x\n", viogrf_r(0x0050));
+	printf("    SYS GRF[0x6250] before: 0x%08x\n", reg_r(RKFB_BLOCK_GRF, 0x6250));
+
+	viogrf_hiword(0x0050, (1<<6), (1<<6));
+	reg_hiword(RKFB_BLOCK_GRF, 0x6250, (1<<6), (1<<6));
 	usleep(1000);
 
-	printf("    GRF_SOC_CON4 after:   0x%08x\n", reg_r(RKFB_BLOCK_GRF, 0x0410));
-	printf("    GRF_SOC_CON20 after:  0x%08x\n", reg_r(RKFB_BLOCK_GRF, 0x6250));
+	printf("    VIO GRF[0x0050] after:  0x%08x\n", viogrf_r(0x0050));
+	printf("    SYS GRF[0x6250] after:  0x%08x\n", reg_r(RKFB_BLOCK_GRF, 0x6250));
 }
 
 /* -------------------------------------------------------------------------
@@ -286,13 +295,20 @@ step3_vop(uint32_t fb_pa)
 	vop_w(0x0030, 0x01000001);               /* WIN0_CTRL0: enable, ARGB8888, AXI_GATHER_EN(bit24) */
 
 	/*
-	 * SYS_CTRL on the working path requires hdmi_dclk_en (bit1).
-	 * The newer bit13 path leaves the live register unchanged on this board,
-	 * so preserve the older logic: clear standby bits and set bit1.
+	 * SYS_CTRL (0x0008) output enable bits (NOT shadow — take effect now):
+	 *   bit11: standby_en  (0=running)
+	 *   bit12: rgb_out_en  (clear — not using RGB parallel)
+	 *   bit13: hdmi_out_en (1=VOP feeds HDMI encoder)  ← THE KEY BIT
+	 *   bit14: edp_out_en  (clear)
+	 *
+	 * Must set bit13 so the VOP actually drives the DW-HDMI controller.
+	 * Without it the VOP runs but its output goes nowhere useful.
 	 */
-	sys_ctrl = vop_r(0x0008);
-	sys_ctrl &= ~((3u << 22));   /* clear standby bits */
-	sys_ctrl |=  (1u << 1);      /* hdmi_dclk_en */
+	sys_ctrl  = vop_r(0x0008);
+	sys_ctrl &= ~(1u << 11);   /* clear standby */
+	sys_ctrl &= ~(1u << 12);   /* clear rgb_out_en */
+	sys_ctrl &= ~(1u << 14);   /* clear edp_out_en */
+	sys_ctrl |=  (1u << 13);   /* SET hdmi_out_en */
 	vop_w(0x0008, sys_ctrl);
 
 	/* Commit shadow → active */
@@ -302,7 +318,7 @@ step3_vop(uint32_t fb_pa)
 	/* Wait for VOP to start and shadow commit to take effect */
 	usleep(40000);   /* 2+ frames at 60Hz */
 
-	printf("    SYS_CTRL:          0x%08x  (want bit1=1, standby cleared)\n", vop_r(0x0008));
+	printf("    SYS_CTRL:          0x%08x  (want bit13=1 bit11=0)\n", vop_r(0x0008));
 	printf("    DSP_CTRL0:         0x%08x  (want bits[3:0]=0=RGB888)\n", vop_r(0x0004));
 	printf("    WIN0_CTRL0:        0x%08x  (expect 0x00000001)\n", vop_r(0x0030));
 	printf("    WIN0_YRGB_MST:     0x%08x  (expect 0x%08x)\n", vop_r(0x0040), fb_pa);
@@ -522,10 +538,21 @@ step5_phy(void)
 		 * PHY is already locked. The Innosilicon PHY on RK3399 auto-locks
 		 * to the pixel clock when powered and out of reset. Resetting it
 		 * (MC_PHYRSTZ cycle) only disrupts the lock and may cause it to
-		 * fail to relock within a short poll window. Skip reset.
+		 * fail to relock within a short poll window. Skip MPLL reprogramming.
+		 *
+		 * However, MC_PHYRSTZ MUST still be released (=0x01) so that
+		 * DW-HDMI can drive the PHY TMDS outputs. If MC_PHYRSTZ stays 0,
+		 * the PHY is held in soft reset and no TMDS signal is produced.
 		 */
-		printf("    PHY already locked (bit4=1), HPD=%d. Skipping reset.\n",
+		printf("    PHY already locked (bit4=1), HPD=%d.\n",
 		    (stat >> 1) & 1);
+		if (hdmi_r(0x4005) == 0x00) {
+			printf("    MC_PHYRSTZ=0x00 (PHY in reset) - releasing...\n");
+			hdmi_w(0x4005, 0x01);
+			usleep(5000);
+		}
+		printf("    MC_PHYRSTZ: 0x%02x  PHY_STAT0: 0x%02x\n",
+		    hdmi_r(0x4005), hdmi_r(0x3004));
 		return;
 	}
 

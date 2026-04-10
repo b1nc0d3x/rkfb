@@ -85,8 +85,11 @@ struct rkfb_softc {
 #define MMIO_READ1(base, off) \
         (*(volatile uint8_t *)((base) + (off)))
 
-#define VOP_READ4(sc, o)        MMIO_READ4((sc)->vop_va, (o))
-#define VOP_WRITE4(sc, o, v)    MMIO_WRITE4((sc)->vop_va, (o), (v))
+#define VOP_READ4(sc, o)        bus_read_4((sc)->vop_res, (o))
+#define VOP_WRITE4(sc, o, v) do { \
+        bus_write_4((sc)->vop_res, (o), (v)); \
+        bus_barrier((sc)->vop_res, (o), 4, BUS_SPACE_BARRIER_READ | BUS_SPACE_BARRIER_WRITE); \
+} while (0)
 #define GRF_READ4(sc, o)        MMIO_READ4((sc)->grf_va, (o))
 #define GRF_WRITE4(sc, o, v)    MMIO_WRITE4((sc)->grf_va, (o), (v))
 #define CRU_READ4(sc, o)        MMIO_READ4((sc)->cru_va, (o))
@@ -106,14 +109,14 @@ rkfb_vop_write_allowed(uint32_t off)
 {
         switch (off) {
         /* System / global */
-        case 0x0000: case 0x0004: case 0x0008: case 0x0010:
+        case 0x0000: case 0x0008: case 0x000c: case 0x0010: case 0x0014: case 0x0018: case 0x001c: case 0x0020:
         /* WIN0 */
         case 0x0030: case 0x003c: case 0x0040: case 0x0048:
         case 0x004c: case 0x0050:
         /* Display timing: HTOTAL/HS, HACT, VTOTAL/VS, VACT */
-        case 0x0188: case 0x018c: case 0x0190: case 0x0194:
+        case 0x0188: case 0x018c: case 0x0190: case 0x0194: case 0x0198: case 0x019c:
         /* Post-processing / other */
-        case 0x020c: case 0x028c: case 0x029c:
+        case 0x020c: case 0x0280: case 0x0284: case 0x0288: case 0x028c: case 0x0290: case 0x0294: case 0x0298: case 0x029c:
         case 0x0310: case 0x0314: case 0x0318:
                 return (1);
         default:
@@ -250,7 +253,10 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                 case RKFB_BLOCK_VOP:
                         if ((ro->off & 3) || ro->off >= 0x10000) return (EINVAL);
                         if (!rkfb_vop_write_allowed(ro->off)) return (EPERM);
-                        VOP_WRITE4(sc, ro->off, ro->val); return (0);
+                        VOP_WRITE4(sc, ro->off, ro->val);
+                        if (ro->off == 0x0000 || ro->off == 0x0008 || ro->off == 0x0030 || ro->off == 0x0040 || ro->off == 0x01a0 || ro->off == 0x01a8)
+                                device_printf(sc->dev, "VOPW off=0x%04x val=0x%08x bus=0x%08x raw=0x%08x\n", ro->off, ro->val, VOP_READ4(sc, ro->off), MMIO_READ4(sc->vop_va, ro->off));
+                        return (0);
                 case RKFB_BLOCK_GRF:
                         if ((ro->off & 3) || ro->off >= RKFB_GRF_SIZE) return (EINVAL);
                         GRF_WRITE4(sc, ro->off, ro->val); return (0);
@@ -411,7 +417,7 @@ rkfb_attach(device_t dev)
 
         sc->fb_va = (vm_offset_t)kmem_alloc_contig(
             round_page(sc->fb_size), M_WAITOK | M_ZERO,
-            0, ~0UL, PAGE_SIZE, 0, VM_MEMATTR_WRITE_COMBINING);
+            0, 0x10000000UL - 1, PAGE_SIZE, 0, VM_MEMATTR_WRITE_COMBINING);
         if (sc->fb_va == 0) {
                 device_printf(dev, "cannot allocate framebuffer\n");
                 error = ENOMEM; goto fail_hdmi;
