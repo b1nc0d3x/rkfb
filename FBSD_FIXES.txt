@@ -34,3 +34,7 @@ FreeBSD-specific issues and fixes found during rkfb driver bring-up
 - During repeated kldload/kldunload cycles, rkfb0 often detached and reattached quickly while the module remained loaded.
 - This complicates interpretation of live register state during rapid testing.
 - Needs stabilization or awareness during future testing.
+
+- 2026-04-11: Scanout-base takeover was blocked by SYS_CTRL bit11 (global regdone) being cleared in rkfb_init.
+  On RK3399 VOP, clearing bit11 leaves timing/WIN0/AFBCD writes in boot shadow state even though ioctl writes succeed.
+  Setting SYS_CTRL to 0x20802800 made WIN0_CTRL0, WIN0_YRGB_MST, timing, and AFBCD disable latch correctly.

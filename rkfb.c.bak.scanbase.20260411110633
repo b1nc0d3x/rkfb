@@ -255,7 +255,7 @@ rkfb_ioctl(struct cdev *dev, u_long cmd, caddr_t data, int fflag,
                         if ((ro->off & 3) || ro->off >= 0x10000) return (EINVAL);
                         if (!rkfb_vop_write_allowed(ro->off)) return (EPERM);
                         VOP_WRITE4(sc, ro->off, ro->val);
-                        if (ro->off == 0x0000 || ro->off == 0x0008 || ro->off == 0x0030 || ro->off == 0x0040 || ro->off == 0x006c || ro->off == 0x0188 || ro->off == 0x0190 || ro->off == 0x0200)
+                        if (ro->off == 0x0000 || ro->off == 0x0008 || ro->off == 0x0030 || ro->off == 0x0040 || ro->off == 0x01a0 || ro->off == 0x01a8)
                                 device_printf(sc->dev, "VOPW off=0x%04x val=0x%08x bus=0x%08x raw=0x%08x\n", ro->off, ro->val, VOP_READ4(sc, ro->off), MMIO_READ4(sc->vop_va, ro->off));
                         return (0);
                 case RKFB_BLOCK_GRF:

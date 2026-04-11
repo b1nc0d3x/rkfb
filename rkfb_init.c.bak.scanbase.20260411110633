@@ -231,17 +231,31 @@ step1_reset_release(void)
 static void
 step2_grf_mux(void)
 {
-printf("\n[2] GRF mux: big display block -> HDMI (bit6=0)...\n");
-printf("    VIO GRF[0x0050] before: 0x%08x\n", viogrf_r(0x0050));
-printf("    SYS GRF[0x6250] before: 0x%08x\n", reg_r(RKFB_BLOCK_GRF, 0x6250));
+	printf("\n[2] GRF mux: VOPB -> HDMI (RK3399_HDMI_LCDC_SEL bit6=1)...\n");
 
-/* RK3399 HDMI route: bit6 clear selects the big display block. */
-viogrf_hiword(0x0050, (1<<6), 0);
-reg_hiword(RKFB_BLOCK_GRF, 0x6250, (1<<6), 0);
-usleep(1000);
+	/*
+	 * RK3399_HDMI_LCDC_SEL bit6: 1=VOPB, 0=VOPL
+	 * The exact register location varies by source:
+	 * - Some say VIO GRF offset 0x0050 (SOC_CON20 = word 20 * 4)
+	 * - Some say VIO GRF offset 0x0250
+	 * - Linux uses sys GRF with offset RK3399_GRF_SOC_CON20
+	 * Try both VIO GRF offsets; sys GRF is also tried via RKFB_BLOCK_GRF.
+	 */
+	/*
+	 * Try all known locations for HDMI_LCDC_SEL (VOPB=1 / VOPL=0):
+	 *   - VIO GRF (0xFF770000) offset 0x0050  (VIO_GRF_SOC_CON20 = 20*4)
+	 *   - SYS GRF (0xFF320000) offset 0x6250  (RK3399_GRF_SOC_CON20 from Linux)
+	 * Linux dw_hdmi-rockchip.c uses the SYS GRF via rockchip,grf phandle.
+	 */
+	printf("    VIO GRF[0x0050] before: 0x%08x\n", viogrf_r(0x0050));
+	printf("    SYS GRF[0x6250] before: 0x%08x\n", reg_r(RKFB_BLOCK_GRF, 0x6250));
 
-printf("    VIO GRF[0x0050] after:  0x%08x\n", viogrf_r(0x0050));
-printf("    SYS GRF[0x6250] after:  0x%08x\n", reg_r(RKFB_BLOCK_GRF, 0x6250));
+	viogrf_hiword(0x0050, (1<<6), (1<<6));
+	reg_hiword(RKFB_BLOCK_GRF, 0x6250, (1<<6), (1<<6));
+	usleep(1000);
+
+	printf("    VIO GRF[0x0050] after:  0x%08x\n", viogrf_r(0x0050));
+	printf("    SYS GRF[0x6250] after:  0x%08x\n", reg_r(RKFB_BLOCK_GRF, 0x6250));
 }
 
 /* -------------------------------------------------------------------------
@@ -272,17 +286,11 @@ step3_vop(uint32_t fb_pa)
 	vop_w(0x0190, 0x02ed0004);   /* DSP_VTOTAL_VS_END */
 	vop_w(0x0194, 0x001902e9);   /* DSP_VACT_ST_END   */
 
-	/* Match the common-output state from the only successful linear takeover. */
-vop_w(0x000c, 0x0003a000);
-vop_w(0x0010, 0x00000000);
-vop_w(0x0014, 0x0000e400);
-vop_w(0x0018, 0x00000000);
-
-/* Disable AFBCD boot path and force linear WIN0 scanout. */
-vop_w(0x0200, 0x00000000);
-vop_w(0x0204, 0x00000000);
-vop_w(0x0208, 0x00000000);
-vop_w(0x006c, 0x00000000);
+	/* Disable AFBCD boot path and force linear WIN0 scanout. */
+	vop_w(0x0200, 0x00000000);
+	vop_w(0x0204, 0x00000000);
+	vop_w(0x0208, 0x00000000);
+	vop_w(0x006c, 0x00000000);
 
 	/* WIN0: ARGB8888, 1280x720 */
 	vop_w(0x003c, 0x05000500);               /* WIN0_VIR */
@@ -302,8 +310,12 @@ vop_w(0x006c, 0x00000000);
 	 * Must set bit13 so the VOP actually drives the DW-HDMI controller.
 	 * Without it the VOP runs but its output goes nowhere useful.
 	 */
-	sys_ctrl = 0x20802800;   /* gate on, global-regdone enabled, big-display HDMI path */
-vop_w(0x0008, sys_ctrl);
+	sys_ctrl  = vop_r(0x0008);
+	sys_ctrl &= ~(1u << 11);   /* clear standby */
+	sys_ctrl &= ~(1u << 12);   /* clear rgb_out_en */
+	sys_ctrl &= ~(1u << 14);   /* clear edp_out_en */
+	sys_ctrl |=  (1u << 13);   /* SET hdmi_out_en */
+	vop_w(0x0008, sys_ctrl);
 
 	/* Commit shadow → active */
 	printf("    Committing shadow regs...\n");
@@ -312,8 +324,8 @@ vop_w(0x0008, sys_ctrl);
 	/* Wait for VOP to start and shadow commit to take effect */
 	usleep(40000);   /* 2+ frames at 60Hz */
 
-	printf("    SYS_CTRL:          0x%08x  (expect 0x20802002)\n", vop_r(0x0008));
-printf("    DSP_CTRL0:         0x%08x  (expect 0x00000000)\n", vop_r(0x0010));
+	printf("    SYS_CTRL:          0x%08x  (want bit13=1 bit11=0)\n", vop_r(0x0008));
+	printf("    DSP_CTRL0:         0x%08x  (want bits[3:0]=0=RGB888)\n", vop_r(0x0004));
 	printf("    WIN0_CTRL0:        0x%08x  (expect 0x00000001)\n", vop_r(0x0030));
 	printf("    WIN0_YRGB_MST:     0x%08x  (expect 0x%08x)\n", vop_r(0x0040), fb_pa);
 	printf("    DSP_HTOTAL_HS_END: 0x%08x  (expect 0x06710027)\n", vop_r(0x0188));
