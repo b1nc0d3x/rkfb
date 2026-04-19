@@ -12,6 +12,7 @@ milestones on RockPro64 / RK3399:
   - `/dev/dri/card0`
   - `/dev/dri/controlD64`
 - a fixed `1920x1080` mode is programmed
+- EDID is now read through the native FreeBSD DDC / `iicbus` path
 - `fbd` / `vt` can attach through the DRM path
 - dumb-buffer capability is reported and working
 - Xorg `modesetting` can use the driver at fixed `1920x1080`
@@ -29,6 +30,30 @@ That was the concrete proof needed to get past the earlier Xorg failure:
   - `KMS doesn't support dumb interface`
 - current result:
   - Xorg `modesetting` reaches the fixed HDMI output path
+
+## EDID Status
+
+The connector is no longer purely synthetic.
+
+It now:
+
+- looks up the HDMI DDC bus through the device tree
+- reads EDID through FreeBSD's native `device_t` DDC path
+- feeds EDID into DRM's standard property and mode parsing helpers
+
+Current limitation:
+
+- `mode_valid` still intentionally restricts the hardware path to
+  `1920x1080`
+- so EDID-backed probing works, but the driver still only accepts
+  `1920x1080` modes for actual use
+
+That is why Xorg now reports:
+
+- `EDID for output HDMI-1`
+- probed `1920x1080` variants from the monitor
+- `Output HDMI-1 connected`
+- `Output HDMI-1 using initial mode 1920x1080 +0+0`
 
 ## Still In Progress
 
