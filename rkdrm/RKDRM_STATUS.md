@@ -17,6 +17,10 @@ milestones on RockPro64 / RK3399:
   - VOP timing registers
   - DW-HDMI frame-composer timing registers
   - HDMI PHY parameter selection
+- native HPD polling is implemented through a driver-local timeout task plus
+  `drm_helper_hpd_irq_event()`
+- connector DPMS and CRTC prepare/commit/disable hooks now drive real hardware
+  blank/unblank instead of remaining no-ops
 - `fbd` / `vt` can attach through the DRM path
 - dumb-buffer capability is reported and working
 - Xorg `modesetting` can use the driver through `/dev/dri/card0`
@@ -100,6 +104,7 @@ The new mode path has now passed all of the following on the RockPro64 board:
 - kernel install and reboot
 - DRM attach and `/dev/dri/card0` creation on the new kernel
 - Xorg `modesetting` startup on the new kernel
+- automatic `slim` / Xorg startup on the new kernel
 - EDID-backed mode exposure through `xrandr`
 - actual runtime switches to non-`1080p` modes:
   - `1024x768`
@@ -115,7 +120,7 @@ This branch is not a complete desktop-grade DRM stack yet.
 
 Missing or incomplete pieces still include:
 
-- hotplug handling beyond the current fixed-mode path
+- a physical unplug/replug validation pass for the new HPD path
 - hardware-accelerated rendering
 - broader KMS cleanup around page flips / vblank / polish
 

@@ -18,7 +18,7 @@
  * - one internal scanout buffer is allocated and programmed into WIN0
  *
  * It is still not a full display driver:
- * - no hotplug policy beyond raw HPD
+ * - hotplug is a native HPD task, not a full IRQ-driven connector stack yet
  * - fbdev/vt is currently a helper-backed bridge over the boot scanout buffer
  *
  * The purpose of this stage is to move the Rockchip DRM bring-up into the
@@ -34,6 +34,7 @@
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/pctrie.h>
+#include <sys/taskqueue.h>
 #include <sys/vmem.h>
 
 #include <machine/bus.h>
@@ -83,6 +84,7 @@ static int rk_drm_connector_add_fixed_mode(struct drm_connector *connector);
 static void rk_drm_fbdev_destroy(struct rk_drm_softc *sc);
 static int rk_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
     struct drm_framebuffer *old_fb);
+static void rk_drm_hpd_task(void *arg, int pending);
 
 static void
 rk_drm_mode_fill_default(struct drm_display_mode *mode)
@@ -796,21 +798,70 @@ rk_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
 static void
 rk_drm_crtc_dpms(struct drm_crtc *crtc, int mode)
 {
+	struct rk_drm_softc *sc;
+	const struct drm_display_mode *active_mode;
+	struct drm_display_mode default_mode;
+	int error;
+
+	sc = device_get_softc(crtc->dev->dev);
+	if (mode != DRM_MODE_DPMS_ON) {
+		rk_drm_hw_disable(sc);
+		return;
+	}
+	if (sc->output_enabled)
+		return;
+
+	active_mode = &crtc->hwmode;
+	if (!rk_drm_hw_mode_valid(active_mode)) {
+		active_mode = &crtc->mode;
+		if (!rk_drm_hw_mode_valid(active_mode)) {
+			rk_drm_mode_fill_default(&default_mode);
+			active_mode = &default_mode;
+		}
+	}
+
+	error = rk_drm_hw_modeset(sc, active_mode);
+	if (error != 0) {
+		device_printf(sc->dev, "Cannot re-enable display pipe: %d\n",
+		    error);
+		return;
+	}
+	if (crtc->fb == NULL)
+		return;
+	error = rk_drm_crtc_mode_set_base(crtc, crtc->x, crtc->y, NULL);
+	if (error != 0)
+		device_printf(sc->dev, "Cannot restore scanout after DPMS on: %d\n",
+		    -error);
 }
 
 static void
 rk_drm_crtc_prepare(struct drm_crtc *crtc)
 {
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(crtc->dev->dev);
+	sc->hpd_squelch = true;
+	rk_drm_hw_disable(sc);
 }
 
 static void
 rk_drm_crtc_commit(struct drm_crtc *crtc)
 {
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(crtc->dev->dev);
+	sc->hpd_last_status = rk_drm_hw_hpd(sc);
+	sc->hpd_state_valid = true;
+	sc->hpd_squelch = false;
 }
 
 static void
 rk_drm_crtc_disable(struct drm_crtc *crtc)
 {
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(crtc->dev->dev);
+	rk_drm_hw_disable(sc);
 }
 
 static const struct drm_crtc_helper_funcs rk_drm_crtc_helper_funcs = {
@@ -888,6 +939,7 @@ rk_drm_connector_detect(struct drm_connector *connector, bool force)
 static void
 rk_drm_connector_dpms(struct drm_connector *connector, int mode)
 {
+	drm_helper_connector_dpms(connector, mode);
 }
 
 static int
@@ -910,6 +962,29 @@ static const struct drm_connector_funcs rk_drm_connector_funcs = {
 	.fill_modes = rk_drm_connector_fill_modes,
 	.destroy = rk_drm_connector_destroy,
 };
+
+static void
+rk_drm_hpd_task(void *arg, int pending)
+{
+	struct rk_drm_softc *sc;
+	bool hpd, changed;
+
+	(void)pending;
+
+	sc = arg;
+	if (!sc->hpd_task_running)
+		return;
+
+	hpd = rk_drm_hw_hpd(sc);
+	changed = sc->hpd_state_valid && !sc->hpd_squelch &&
+	    hpd != sc->hpd_last_status;
+	sc->hpd_last_status = hpd;
+	sc->hpd_state_valid = true;
+	if (changed)
+		drm_helper_hpd_irq_event(&sc->drm_dev);
+	if (sc->hpd_task_running)
+		taskqueue_enqueue_timeout(taskqueue_thread, &sc->hpd_task, hz);
+}
 
 static int
 rk_drm_connector_add_fixed_mode(struct drm_connector *connector)
@@ -1025,8 +1100,7 @@ rk_drm_kms_init(struct rk_drm_softc *sc)
 	    &rk_drm_connector_helper_funcs);
 	sc->connector.interlace_allowed = false;
 	sc->connector.doublescan_allowed = false;
-	sc->connector.polled = DRM_CONNECTOR_POLL_CONNECT |
-	    DRM_CONNECTOR_POLL_DISCONNECT;
+	sc->connector.polled = DRM_CONNECTOR_POLL_HPD;
 	drm_mode_connector_attach_encoder(&sc->connector, &sc->encoder);
 
 	drm_mode_config_reset(drm_dev);
@@ -1062,6 +1136,12 @@ rk_drm_drm_load(struct drm_device *drm_dev, unsigned long flags)
 	}
 
 	drm_kms_helper_poll_init(drm_dev);
+	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->hpd_task, 0, rk_drm_hpd_task,
+	    sc);
+	sc->hpd_task_running = true;
+	sc->hpd_last_status = rk_drm_hw_hpd(sc);
+	sc->hpd_state_valid = true;
+	taskqueue_enqueue_timeout(taskqueue_thread, &sc->hpd_task, hz);
 	return (0);
 }
 
@@ -1071,6 +1151,9 @@ rk_drm_drm_unload(struct drm_device *drm_dev)
 	struct rk_drm_softc *sc;
 
 	sc = device_get_softc(drm_dev->dev);
+	sc->hpd_task_running = false;
+	taskqueue_cancel_timeout(taskqueue_thread, &sc->hpd_task, NULL);
+	taskqueue_drain_timeout(taskqueue_thread, &sc->hpd_task);
 	drm_kms_helper_poll_fini(drm_dev);
 	rk_drm_fbdev_destroy(sc);
 	rk_drm_kms_fini(sc);
