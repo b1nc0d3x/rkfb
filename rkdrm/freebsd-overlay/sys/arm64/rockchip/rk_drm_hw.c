@@ -790,6 +790,35 @@ rk_drm_hw_set_scanout(struct rk_drm_softc *sc, vm_paddr_t paddr, uint32_t stride
 	return (0);
 }
 
+void
+rk_drm_hw_disable(struct rk_drm_softc *sc)
+{
+	uint32_t sys_ctrl;
+
+	if (!sc->hw_attached)
+		return;
+
+	rk_drm_vop_write4(sc, 0x0030, 0x00000000);
+	sys_ctrl = rk_drm_vop_read4(sc, 0x0008);
+	sys_ctrl &= ~(RK_DRM_VOP_SYS_CTRL_ENABLE |
+	    RK_DRM_VOP_SYS_CTRL_RGB_EN |
+	    RK_DRM_VOP_SYS_CTRL_HDMI_EN);
+	sys_ctrl |= RK_DRM_VOP_SYS_CTRL_STANDBY;
+	rk_drm_vop_write4(sc, 0x0008, sys_ctrl);
+	rk_drm_vop_write4(sc, 0x0000, 0x00000001);
+
+	/*
+	 * Blank TMDS output but keep HPD sense alive so native hotplug polling
+	 * still works while the pipe is idle.
+	 */
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_PACKET_TX_EN, 0x00);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_PKT_SEND_CTL, 0x00);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_PHY_CONF0,
+	    RK_DRM_HDMI_PHY_CONF0_PDDQ |
+	    RK_DRM_HDMI_PHY_CONF0_ENHPDRXSENSE);
+	sc->output_enabled = false;
+}
+
 static void
 rk_drm_hdmi_toggle_main_reset(struct rk_drm_softc *sc, uint8_t mask)
 {
@@ -1255,6 +1284,7 @@ rk_drm_hw_modeset(struct rk_drm_softc *sc, const struct drm_display_mode *mode)
 	}
 	rk_drm_dw_hdmi_finish_mode(sc, mode);
 	rk_drm_hdmi_enable_hdmi_mode(sc, mode);
+	sc->output_enabled = true;
 	return (0);
 }
 

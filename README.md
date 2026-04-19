@@ -48,6 +48,10 @@ Current bounded-mode policy:
 - runtime KMS mode selection is accepted only for progressive modes within
   `1920x1080` whose pixel clocks match the currently implemented RK3399 VPLL
   table
+- native HPD polling is now wired through a driver-local timeout task and
+  `drm_helper_hpd_irq_event()`
+- CRTC prepare/commit/disable/DPMS hooks now perform real hardware blanking
+  and re-enable instead of staying stubbed out
 - the initial supported clocks are:
   - `25.200 MHz`
   - `27.000 MHz`
@@ -72,9 +76,9 @@ Current bounded-mode policy:
 
 Still missing:
 
-- hotplug policy
 - hardware acceleration
 - broader KMS polish like page flips / vblank work
+- a physical unplug/replug validation pass for the new HPD path
 
 ## Intended Use
 

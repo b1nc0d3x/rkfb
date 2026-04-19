@@ -8,6 +8,8 @@
 #ifndef _ARM64_ROCKCHIP_RK_DRM_H_
 #define _ARM64_ROCKCHIP_RK_DRM_H_
 
+#include <sys/taskqueue.h>
+
 #define RK_DRM_DRIVER_NAME        "rk_drm"
 #define RK_DRM_DRIVER_DESC        "RK3399 DRM/KMS EDID-bounded modeset"
 #define RK_DRM_DRIVER_DATE        "20260419"
@@ -49,6 +51,12 @@ struct rk_drm_softc {
 	struct rk_drm_fbdev	*fbdev;
 	bool			drm_registered;
 	bool			hw_attached;
+	bool			output_enabled;
+	bool			hpd_task_running;
+	bool			hpd_state_valid;
+	bool			hpd_last_status;
+	bool			hpd_squelch;
+	struct timeout_task	hpd_task;
 
 	bus_dma_tag_t		fb_dma_tag;
 	bus_dmamap_t		fb_dma_map;
@@ -87,6 +95,7 @@ void	rk_drm_hw_detach(struct rk_drm_softc *sc);
 bool	rk_drm_hw_mode_valid(const struct drm_display_mode *mode);
 int	rk_drm_hw_modeset(struct rk_drm_softc *sc,
 	    const struct drm_display_mode *mode);
+void	rk_drm_hw_disable(struct rk_drm_softc *sc);
 int	rk_drm_hw_set_scanout(struct rk_drm_softc *sc, vm_paddr_t paddr,
 	    uint32_t stride);
 bool	rk_drm_hw_hpd(struct rk_drm_softc *sc);
