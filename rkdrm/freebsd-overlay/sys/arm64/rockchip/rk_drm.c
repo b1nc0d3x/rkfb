@@ -82,9 +82,26 @@ struct rk_drm_fb {
 
 static int rk_drm_connector_add_fixed_mode(struct drm_connector *connector);
 static void rk_drm_fbdev_destroy(struct rk_drm_softc *sc);
+static int rk_drm_fb_get_paddr_stride(struct rk_drm_softc *sc,
+    struct drm_framebuffer *drm_fb, vm_paddr_t *paddr, uint32_t *stride);
 static int rk_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
     struct drm_framebuffer *old_fb);
+static int rk_drm_crtc_page_flip(struct drm_crtc *crtc,
+    struct drm_framebuffer *drm_fb, struct drm_pending_vblank_event *event);
 static void rk_drm_hpd_task(void *arg, int pending);
+static void rk_drm_vblank_task(void *arg, int pending);
+static int rk_drm_crtc_index(struct drm_crtc *crtc);
+static void rk_drm_cancel_page_flip(struct rk_drm_softc *sc,
+    struct drm_file *file_priv);
+static int rk_drm_vblank_ticks_from_mode(const struct drm_display_mode *mode);
+static int rk_drm_hw_modeset_locked(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode);
+static void rk_drm_hw_disable_locked(struct rk_drm_softc *sc);
+static int rk_drm_hw_set_scanout_locked(struct rk_drm_softc *sc,
+    vm_paddr_t paddr, uint32_t stride);
+static bool rk_drm_hw_hpd_locked(struct rk_drm_softc *sc);
+static bool rk_drm_output_enabled_locked(struct rk_drm_softc *sc);
+static void rk_drm_lastclose(struct drm_device *drm_dev);
 
 static void
 rk_drm_mode_fill_default(struct drm_display_mode *mode)
@@ -111,6 +128,300 @@ rk_drm_output_poll_changed(struct drm_device *drm_dev)
 	sc = device_get_softc(drm_dev->dev);
 	if (sc->fbdev != NULL)
 		drm_fb_helper_hotplug_event(&sc->fbdev->fb_helper);
+}
+
+static int
+rk_drm_crtc_index(struct drm_crtc *crtc)
+{
+	struct drm_device *drm_dev;
+	struct drm_crtc *iter;
+	int index;
+
+	drm_dev = crtc->dev;
+	index = 0;
+	list_for_each_entry(iter, &drm_dev->mode_config.crtc_list, head) {
+		if (iter == crtc)
+			return (index);
+		index++;
+	}
+	return (-1);
+}
+
+static int
+rk_drm_vblank_ticks_from_mode(const struct drm_display_mode *mode)
+{
+	uint64_t numerator, denominator;
+
+	if (mode == NULL || mode->clock <= 0 || mode->htotal <= 0 ||
+	    mode->vtotal <= 0)
+		return (MAX(hz / 60, 1));
+
+	numerator = (uint64_t)hz * (uint64_t)mode->htotal *
+	    (uint64_t)mode->vtotal;
+	denominator = (uint64_t)mode->clock * 1000ULL;
+	if (denominator == 0)
+		return (MAX(hz / 60, 1));
+
+	return ((int)MAX((numerator + denominator - 1) / denominator, 1ULL));
+}
+
+static int
+rk_drm_hw_modeset_locked(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
+{
+	int error;
+
+	mtx_lock(&sc->hw_lock);
+	error = rk_drm_hw_modeset(sc, mode);
+	mtx_unlock(&sc->hw_lock);
+	return (error);
+}
+
+static void
+rk_drm_hw_disable_locked(struct rk_drm_softc *sc)
+{
+	mtx_lock(&sc->hw_lock);
+	rk_drm_hw_disable(sc);
+	mtx_unlock(&sc->hw_lock);
+}
+
+static int
+rk_drm_hw_set_scanout_locked(struct rk_drm_softc *sc, vm_paddr_t paddr,
+    uint32_t stride)
+{
+	int error;
+
+	mtx_lock(&sc->hw_lock);
+	error = rk_drm_hw_set_scanout(sc, paddr, stride);
+	mtx_unlock(&sc->hw_lock);
+	return (error);
+}
+
+static bool
+rk_drm_hw_hpd_locked(struct rk_drm_softc *sc)
+{
+	bool hpd;
+
+	mtx_lock(&sc->hw_lock);
+	hpd = rk_drm_hw_hpd(sc);
+	mtx_unlock(&sc->hw_lock);
+	return (hpd);
+}
+
+static bool
+rk_drm_output_enabled_locked(struct rk_drm_softc *sc)
+{
+	bool enabled;
+
+	mtx_lock(&sc->hw_lock);
+	enabled = sc->output_enabled;
+	mtx_unlock(&sc->hw_lock);
+	return (enabled);
+}
+
+static void
+rk_drm_hpd_state_locked(struct rk_drm_softc *sc, bool *valid, bool *last_status,
+    bool *squelch)
+{
+	mtx_lock(&sc->hw_lock);
+	if (valid != NULL)
+		*valid = sc->hpd_state_valid;
+	if (last_status != NULL)
+		*last_status = sc->hpd_last_status;
+	if (squelch != NULL)
+		*squelch = sc->hpd_squelch;
+	mtx_unlock(&sc->hw_lock);
+}
+
+static void
+rk_drm_hpd_update_locked(struct rk_drm_softc *sc, bool valid, bool last_status,
+    bool squelch)
+{
+	mtx_lock(&sc->hw_lock);
+	sc->hpd_state_valid = valid;
+	sc->hpd_last_status = last_status;
+	sc->hpd_squelch = squelch;
+	mtx_unlock(&sc->hw_lock);
+}
+
+static void
+rk_drm_hpd_set_squelch_locked(struct rk_drm_softc *sc, bool squelch)
+{
+	mtx_lock(&sc->hw_lock);
+	sc->hpd_squelch = squelch;
+	mtx_unlock(&sc->hw_lock);
+}
+
+static bool
+rk_drm_hpd_task_running_locked(struct rk_drm_softc *sc)
+{
+	bool running;
+
+	mtx_lock(&sc->hw_lock);
+	running = sc->hpd_task_running;
+	mtx_unlock(&sc->hw_lock);
+	return (running);
+}
+
+static bool
+rk_drm_vblank_task_running_locked(struct rk_drm_softc *sc)
+{
+	bool running;
+
+	mtx_lock(&sc->hw_lock);
+	running = sc->vblank_task_running;
+	mtx_unlock(&sc->hw_lock);
+	return (running);
+}
+
+static bool
+rk_drm_vblank_enable_locked(struct rk_drm_softc *sc)
+{
+	bool start;
+
+	mtx_lock(&sc->hw_lock);
+	start = !sc->vblank_task_running;
+	sc->vblank_task_running = true;
+	mtx_unlock(&sc->hw_lock);
+	return (start);
+}
+
+static void
+rk_drm_vblank_disable_locked(struct rk_drm_softc *sc)
+{
+	mtx_lock(&sc->hw_lock);
+	sc->vblank_task_running = false;
+	mtx_unlock(&sc->hw_lock);
+}
+
+static void
+rk_drm_hpd_start_locked(struct rk_drm_softc *sc, bool initial_hpd)
+{
+	mtx_lock(&sc->hw_lock);
+	sc->hpd_task_running = true;
+	sc->hpd_last_status = initial_hpd;
+	sc->hpd_state_valid = true;
+	sc->hpd_squelch = false;
+	mtx_unlock(&sc->hw_lock);
+}
+
+static void
+rk_drm_hpd_stop_locked(struct rk_drm_softc *sc)
+{
+	mtx_lock(&sc->hw_lock);
+	sc->hpd_task_running = false;
+	mtx_unlock(&sc->hw_lock);
+}
+
+static void
+rk_drm_cancel_page_flip(struct rk_drm_softc *sc, struct drm_file *file_priv)
+{
+	struct drm_pending_vblank_event *event;
+	struct drm_file *owner;
+	int pipe;
+
+	mtx_lock(&sc->drm_dev.event_lock);
+	event = sc->pending_flip_event;
+	if (event == NULL) {
+		pipe = rk_drm_crtc_index(&sc->crtc);
+		sc->pending_fb = NULL;
+		if (sc->pending_flip_put && pipe >= 0)
+			drm_vblank_put(&sc->drm_dev, pipe);
+		sc->pending_flip_put = false;
+		mtx_unlock(&sc->drm_dev.event_lock);
+		return;
+	}
+	if (file_priv != NULL && event->base.file_priv != file_priv) {
+		mtx_unlock(&sc->drm_dev.event_lock);
+		return;
+	}
+
+	sc->pending_flip_event = NULL;
+	sc->pending_fb = NULL;
+	sc->pending_flip_put = false;
+	owner = event->base.file_priv;
+	pipe = event->pipe;
+	if (owner != NULL) {
+		owner->event_space += sizeof(event->event);
+		wakeup(&owner->event_space);
+	}
+	mtx_unlock(&sc->drm_dev.event_lock);
+
+	event->base.destroy(&event->base);
+	drm_vblank_put(&sc->drm_dev, pipe);
+}
+
+static void
+rk_drm_vblank_task(void *arg, int pending)
+{
+	struct rk_drm_softc *sc;
+	struct drm_pending_vblank_event *event;
+	struct drm_framebuffer *new_fb;
+	vm_paddr_t paddr;
+	uint32_t stride;
+	bool put_vblank, running;
+	int pipe, error;
+
+	(void)pending;
+
+	sc = arg;
+	running = rk_drm_vblank_task_running_locked(sc);
+	if (!running)
+		return;
+
+	pipe = rk_drm_crtc_index(&sc->crtc);
+	if (pipe < 0)
+		return;
+
+	event = NULL;
+	new_fb = NULL;
+	put_vblank = false;
+
+	mtx_lock(&sc->drm_dev.event_lock);
+	if (sc->pending_fb != NULL) {
+		new_fb = sc->pending_fb;
+		sc->pending_fb = NULL;
+	}
+	mtx_unlock(&sc->drm_dev.event_lock);
+
+	if (new_fb != NULL) {
+		error = rk_drm_fb_get_paddr_stride(sc, new_fb, &paddr, &stride);
+		if (error == 0)
+			error = rk_drm_hw_set_scanout_locked(sc, paddr, stride);
+		if (error == 0)
+			sc->crtc.fb = new_fb;
+		else {
+			device_printf(sc->dev,
+			    "Cannot flip scanout on vblank: %d\n", error);
+			mtx_lock(&sc->drm_dev.event_lock);
+			if (sc->pending_fb == NULL)
+				sc->pending_fb = new_fb;
+			mtx_unlock(&sc->drm_dev.event_lock);
+		}
+	}
+
+	drm_handle_vblank(&sc->drm_dev, pipe);
+
+	mtx_lock(&sc->drm_dev.event_lock);
+	if (sc->pending_flip_event != NULL && sc->pending_fb == NULL) {
+		event = sc->pending_flip_event;
+		sc->pending_flip_event = NULL;
+	}
+	if (sc->pending_fb == NULL && sc->pending_flip_put) {
+		put_vblank = true;
+		sc->pending_flip_put = false;
+	}
+	if (event != NULL)
+		drm_send_vblank_event(&sc->drm_dev, pipe, event);
+	mtx_unlock(&sc->drm_dev.event_lock);
+
+	if (event != NULL || put_vblank)
+		drm_vblank_put(&sc->drm_dev, pipe);
+
+	running = rk_drm_vblank_task_running_locked(sc);
+	if (running)
+		taskqueue_enqueue_timeout(taskqueue_thread, &sc->vblank_task,
+		    sc->vblank_ticks);
 }
 
 static void
@@ -745,6 +1056,7 @@ static const struct drm_crtc_funcs rk_drm_crtc_funcs = {
 	.reset = rk_drm_crtc_reset,
 	.destroy = rk_drm_crtc_destroy,
 	.set_config = rk_drm_crtc_set_config,
+	.page_flip = rk_drm_crtc_page_flip,
 };
 
 static bool
@@ -765,9 +1077,10 @@ rk_drm_crtc_mode_set(struct drm_crtc *crtc, struct drm_display_mode *mode,
 
 	sc = device_get_softc(crtc->dev->dev);
 	active_mode = adjusted_mode != NULL ? adjusted_mode : mode;
-	error = rk_drm_hw_modeset(sc, active_mode);
+	error = rk_drm_hw_modeset_locked(sc, active_mode);
 	if (error != 0)
 		return (-error);
+	sc->vblank_ticks = rk_drm_vblank_ticks_from_mode(active_mode);
 	if (crtc->fb == NULL)
 		return (0);
 	return (rk_drm_crtc_mode_set_base(crtc, x, y, old_fb));
@@ -789,9 +1102,51 @@ rk_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
 	error = rk_drm_fb_get_paddr_stride(sc, crtc->fb, &paddr, &stride);
 	if (error != 0)
 		return (-error);
-	error = rk_drm_hw_set_scanout(sc, paddr, stride);
+	error = rk_drm_hw_set_scanout_locked(sc, paddr, stride);
 	if (error != 0)
 		return (-error);
+	return (0);
+}
+
+static int
+rk_drm_crtc_page_flip(struct drm_crtc *crtc, struct drm_framebuffer *drm_fb,
+    struct drm_pending_vblank_event *event)
+{
+	struct rk_drm_softc *sc;
+	int pipe, error;
+
+	sc = device_get_softc(crtc->dev->dev);
+	pipe = rk_drm_crtc_index(crtc);
+	if (pipe < 0)
+		return (-ENODEV);
+	if (!rk_drm_hw_hpd_locked(sc) || !rk_drm_output_enabled_locked(sc))
+		return (-EBUSY);
+
+	mtx_lock(&sc->drm_dev.event_lock);
+	if (sc->pending_fb != NULL || sc->pending_flip_event != NULL) {
+		mtx_unlock(&sc->drm_dev.event_lock);
+		return (-EBUSY);
+	}
+	mtx_unlock(&sc->drm_dev.event_lock);
+
+	if (event != NULL) {
+		event->pipe = pipe;
+	}
+	error = drm_vblank_get(&sc->drm_dev, pipe);
+	if (error != 0)
+		return (error);
+
+	mtx_lock(&sc->drm_dev.event_lock);
+	if (sc->pending_fb != NULL || sc->pending_flip_event != NULL) {
+		mtx_unlock(&sc->drm_dev.event_lock);
+		drm_vblank_put(&sc->drm_dev, pipe);
+		return (-EBUSY);
+	}
+	sc->pending_fb = drm_fb;
+	sc->pending_flip_event = event;
+	sc->pending_flip_put = true;
+	mtx_unlock(&sc->drm_dev.event_lock);
+
 	return (0);
 }
 
@@ -805,10 +1160,11 @@ rk_drm_crtc_dpms(struct drm_crtc *crtc, int mode)
 
 	sc = device_get_softc(crtc->dev->dev);
 	if (mode != DRM_MODE_DPMS_ON) {
-		rk_drm_hw_disable(sc);
+		rk_drm_cancel_page_flip(sc, NULL);
+		rk_drm_hw_disable_locked(sc);
 		return;
 	}
-	if (sc->output_enabled)
+	if (rk_drm_output_enabled_locked(sc))
 		return;
 
 	active_mode = &crtc->hwmode;
@@ -820,7 +1176,7 @@ rk_drm_crtc_dpms(struct drm_crtc *crtc, int mode)
 		}
 	}
 
-	error = rk_drm_hw_modeset(sc, active_mode);
+	error = rk_drm_hw_modeset_locked(sc, active_mode);
 	if (error != 0) {
 		device_printf(sc->dev, "Cannot re-enable display pipe: %d\n",
 		    error);
@@ -838,21 +1194,30 @@ static void
 rk_drm_crtc_prepare(struct drm_crtc *crtc)
 {
 	struct rk_drm_softc *sc;
+	int pipe;
 
 	sc = device_get_softc(crtc->dev->dev);
-	sc->hpd_squelch = true;
-	rk_drm_hw_disable(sc);
+	rk_drm_hpd_set_squelch_locked(sc, true);
+	pipe = rk_drm_crtc_index(crtc);
+	if (pipe >= 0)
+		drm_vblank_pre_modeset(&sc->drm_dev, pipe);
+	rk_drm_cancel_page_flip(sc, NULL);
+	rk_drm_hw_disable_locked(sc);
 }
 
 static void
 rk_drm_crtc_commit(struct drm_crtc *crtc)
 {
 	struct rk_drm_softc *sc;
+	bool hpd;
+	int pipe;
 
 	sc = device_get_softc(crtc->dev->dev);
-	sc->hpd_last_status = rk_drm_hw_hpd(sc);
-	sc->hpd_state_valid = true;
-	sc->hpd_squelch = false;
+	pipe = rk_drm_crtc_index(crtc);
+	if (pipe >= 0)
+		drm_vblank_post_modeset(&sc->drm_dev, pipe);
+	hpd = rk_drm_hw_hpd_locked(sc);
+	rk_drm_hpd_update_locked(sc, true, hpd, false);
 }
 
 static void
@@ -861,7 +1226,8 @@ rk_drm_crtc_disable(struct drm_crtc *crtc)
 	struct rk_drm_softc *sc;
 
 	sc = device_get_softc(crtc->dev->dev);
-	rk_drm_hw_disable(sc);
+	rk_drm_cancel_page_flip(sc, NULL);
+	rk_drm_hw_disable_locked(sc);
 }
 
 static const struct drm_crtc_helper_funcs rk_drm_crtc_helper_funcs = {
@@ -915,6 +1281,8 @@ rk_drm_encoder_mode_set(struct drm_encoder *encoder,
 static void
 rk_drm_encoder_disable(struct drm_encoder *encoder)
 {
+	if (encoder->crtc != NULL)
+		rk_drm_crtc_disable(encoder->crtc);
 }
 
 static const struct drm_encoder_helper_funcs rk_drm_encoder_helper_funcs = {
@@ -932,14 +1300,8 @@ rk_drm_connector_detect(struct drm_connector *connector, bool force)
 	struct rk_drm_softc *sc;
 
 	sc = device_get_softc(connector->dev->dev);
-	return (rk_drm_hw_hpd(sc) ? connector_status_connected :
+	return (rk_drm_hw_hpd_locked(sc) ? connector_status_connected :
 	    connector_status_disconnected);
-}
-
-static void
-rk_drm_connector_dpms(struct drm_connector *connector, int mode)
-{
-	drm_helper_connector_dpms(connector, mode);
 }
 
 static int
@@ -957,7 +1319,7 @@ rk_drm_connector_destroy(struct drm_connector *connector)
 }
 
 static const struct drm_connector_funcs rk_drm_connector_funcs = {
-	.dpms = rk_drm_connector_dpms,
+	.dpms = drm_helper_connector_dpms,
 	.detect = rk_drm_connector_detect,
 	.fill_modes = rk_drm_connector_fill_modes,
 	.destroy = rk_drm_connector_destroy,
@@ -967,22 +1329,21 @@ static void
 rk_drm_hpd_task(void *arg, int pending)
 {
 	struct rk_drm_softc *sc;
-	bool hpd, changed;
+	bool hpd, changed, valid, squelch, last_status;
 
 	(void)pending;
 
 	sc = arg;
-	if (!sc->hpd_task_running)
+	if (!rk_drm_hpd_task_running_locked(sc))
 		return;
 
-	hpd = rk_drm_hw_hpd(sc);
-	changed = sc->hpd_state_valid && !sc->hpd_squelch &&
-	    hpd != sc->hpd_last_status;
-	sc->hpd_last_status = hpd;
-	sc->hpd_state_valid = true;
+	hpd = rk_drm_hw_hpd_locked(sc);
+	rk_drm_hpd_state_locked(sc, &valid, &last_status, &squelch);
+	changed = valid && !squelch && hpd != last_status;
+	rk_drm_hpd_update_locked(sc, true, hpd, squelch);
 	if (changed)
 		drm_helper_hpd_irq_event(&sc->drm_dev);
-	if (sc->hpd_task_running)
+	if (rk_drm_hpd_task_running_locked(sc))
 		taskqueue_enqueue_timeout(taskqueue_thread, &sc->hpd_task, hz);
 }
 
@@ -1118,6 +1479,51 @@ rk_drm_kms_fini(struct rk_drm_softc *sc)
 	drm_mode_config_cleanup(&sc->drm_dev);
 }
 
+static void
+rk_drm_preclose(struct drm_device *drm_dev, struct drm_file *file_priv)
+{
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(drm_dev->dev);
+	rk_drm_cancel_page_flip(sc, file_priv);
+}
+
+static void
+rk_drm_lastclose(struct drm_device *drm_dev)
+{
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(drm_dev->dev);
+	if (sc->fbdev != NULL)
+		drm_fb_helper_restore_fbdev_mode(&sc->fbdev->fb_helper);
+}
+
+static int
+rk_drm_enable_vblank(struct drm_device *drm_dev, int pipe)
+{
+	struct rk_drm_softc *sc;
+	bool start;
+
+	sc = device_get_softc(drm_dev->dev);
+	if (pipe != rk_drm_crtc_index(&sc->crtc))
+		return (-ENODEV);
+	start = rk_drm_vblank_enable_locked(sc);
+	if (start)
+		taskqueue_enqueue_timeout(taskqueue_thread, &sc->vblank_task, 1);
+	return (0);
+}
+
+static void
+rk_drm_disable_vblank(struct drm_device *drm_dev, int pipe)
+{
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(drm_dev->dev);
+	if (pipe != rk_drm_crtc_index(&sc->crtc))
+		return;
+	rk_drm_vblank_disable_locked(sc);
+}
+
 static int
 rk_drm_drm_load(struct drm_device *drm_dev, unsigned long flags)
 {
@@ -1129,18 +1535,29 @@ rk_drm_drm_load(struct drm_device *drm_dev, unsigned long flags)
 	if (error != 0)
 		return (error);
 
+	drm_dev->irq_enabled = true;
+	drm_dev->max_vblank_count = 0xffffffff;
+	drm_dev->vblank_disable_allowed = true;
+	error = drm_vblank_init(drm_dev, drm_dev->mode_config.num_crtc);
+	if (error != 0) {
+		rk_drm_kms_fini(sc);
+		return (error);
+	}
+	sc->vblank_ticks = rk_drm_vblank_ticks_from_mode(&sc->crtc.hwmode);
+
 	error = rk_drm_fbdev_init(sc);
 	if (error != 0) {
+		drm_vblank_cleanup(drm_dev);
 		rk_drm_kms_fini(sc);
 		return (error);
 	}
 
 	drm_kms_helper_poll_init(drm_dev);
+	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->vblank_task, 0,
+	    rk_drm_vblank_task, sc);
 	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->hpd_task, 0, rk_drm_hpd_task,
 	    sc);
-	sc->hpd_task_running = true;
-	sc->hpd_last_status = rk_drm_hw_hpd(sc);
-	sc->hpd_state_valid = true;
+	rk_drm_hpd_start_locked(sc, rk_drm_hw_hpd_locked(sc));
 	taskqueue_enqueue_timeout(taskqueue_thread, &sc->hpd_task, hz);
 	return (0);
 }
@@ -1151,11 +1568,16 @@ rk_drm_drm_unload(struct drm_device *drm_dev)
 	struct rk_drm_softc *sc;
 
 	sc = device_get_softc(drm_dev->dev);
-	sc->hpd_task_running = false;
+	rk_drm_vblank_disable_locked(sc);
+	taskqueue_cancel_timeout(taskqueue_thread, &sc->vblank_task, NULL);
+	taskqueue_drain_timeout(taskqueue_thread, &sc->vblank_task);
+	rk_drm_cancel_page_flip(sc, NULL);
+	rk_drm_hpd_stop_locked(sc);
 	taskqueue_cancel_timeout(taskqueue_thread, &sc->hpd_task, NULL);
 	taskqueue_drain_timeout(taskqueue_thread, &sc->hpd_task);
 	drm_kms_helper_poll_fini(drm_dev);
 	rk_drm_fbdev_destroy(sc);
+	drm_vblank_cleanup(drm_dev);
 	rk_drm_kms_fini(sc);
 	return (0);
 }
@@ -1167,6 +1589,11 @@ static struct drm_driver rk_drm_driver = {
 	.driver_features = DRIVER_MODESET | DRIVER_GEM,
 	.load = rk_drm_drm_load,
 	.unload = rk_drm_drm_unload,
+	.preclose = rk_drm_preclose,
+	.lastclose = rk_drm_lastclose,
+	.get_vblank_counter = drm_vblank_count,
+	.enable_vblank = rk_drm_enable_vblank,
+	.disable_vblank = rk_drm_disable_vblank,
 	.gem_free_object = rk_drm_bo_free_object,
 	.gem_pager_ops = &rk_drm_gem_pager_ops,
 	.dumb_create = rk_drm_bo_dumb_create,
@@ -1203,10 +1630,12 @@ rk_drm_attach(device_t dev)
 	sc = device_get_softc(dev);
 	bzero(sc, sizeof(*sc));
 	sc->dev = dev;
+	mtx_init(&sc->hw_lock, "rk_drm hw", NULL, MTX_DEF);
 
 	error = rk_drm_hw_attach(sc);
 	if (error != 0) {
 		device_printf(dev, "hardware attach failed: %d\n", error);
+		mtx_destroy(&sc->hw_lock);
 		return (error);
 	}
 
@@ -1218,6 +1647,7 @@ rk_drm_attach(device_t dev)
 	if (error != 0) {
 		device_printf(dev, "drm_get_platform_dev failed: %d\n", error);
 		rk_drm_hw_detach(sc);
+		mtx_destroy(&sc->hw_lock);
 		return (error);
 	}
 
@@ -1238,6 +1668,7 @@ rk_drm_detach(device_t dev)
 		sc->drm_registered = false;
 	}
 	rk_drm_hw_detach(sc);
+	mtx_destroy(&sc->hw_lock);
 	return (0);
 }
 
