@@ -25,14 +25,6 @@
 
 #define HDMI_PHY_I2C_ADDR  0x69
 
-#define RK_DRM_MODE_HFP             88
-#define RK_DRM_MODE_HSYNC           44
-#define RK_DRM_MODE_HBP            148
-#define RK_DRM_MODE_VFP              4
-#define RK_DRM_MODE_VSYNC            5
-#define RK_DRM_MODE_VBP             36
-#define RK_DRM_MODE_VIC             16
-
 #define RK_DRM_SYS_GRF_GPIO4C_IOMUX 0x0e028
 #define RK_DRM_SYS_GRF_SOC_CON20    0x6250
 #define RK_DRM_GRF_HDMI_LCDC_SEL    (1u << 6)
@@ -79,10 +71,6 @@
 #define RK_DRM_CRU_PLL_DSMPD         (1u << 3)
 #define RK_DRM_CRU_PLL_BYPASS        (1u << 1)
 #define RK_DRM_CRU_PLL_POWER_DOWN    (1u << 0)
-#define RK_DRM_VPLL_148500_FBDIV     99u
-#define RK_DRM_VPLL_148500_REFDIV    4u
-#define RK_DRM_VPLL_148500_POSTDIV1  4u
-#define RK_DRM_VPLL_148500_POSTDIV2  1u
 #define RK_DRM_CRU_CLKGATE_VOP0_MASK \
 	((1u << 12) | (1u << 9) | (1u << 8))
 #define RK_DRM_CRU_CLKGATE_VOPB_MASK \
@@ -105,6 +93,18 @@
 #define RK_DRM_HDMI_VP_REMAP         0x0803
 #define RK_DRM_HDMI_VP_CONF          0x0804
 #define RK_DRM_HDMI_FC_INVIDCONF     0x1000
+#define RK_DRM_HDMI_FC_INHACTV0      0x1001
+#define RK_DRM_HDMI_FC_INHACTV1      0x1002
+#define RK_DRM_HDMI_FC_INHBLANK0     0x1003
+#define RK_DRM_HDMI_FC_INHBLANK1     0x1004
+#define RK_DRM_HDMI_FC_INVACTV0      0x1005
+#define RK_DRM_HDMI_FC_INVACTV1      0x1006
+#define RK_DRM_HDMI_FC_INVBLANK      0x1007
+#define RK_DRM_HDMI_FC_HSYNCINDELAY0 0x1008
+#define RK_DRM_HDMI_FC_HSYNCINDELAY1 0x1009
+#define RK_DRM_HDMI_FC_HSYNCINWIDTH0 0x100a
+#define RK_DRM_HDMI_FC_HSYNCINWIDTH1 0x100b
+#define RK_DRM_HDMI_FC_VSYNCINDELAY  0x100c
 #define RK_DRM_HDMI_FC_VSYNCINWIDTH  0x100d
 #define RK_DRM_HDMI_FC_CTRLDUR       0x1011
 #define RK_DRM_HDMI_FC_EXCTRLDUR     0x1012
@@ -174,8 +174,13 @@
 #define RK_DRM_HDMI_MC_SWRST_TMDS    (1u << 1)
 #define RK_DRM_HDMI_MC_SWRST_PIXEL   (1u << 0)
 #define RK_DRM_HDMI_MC_CLKDIS_CECCLK_DISABLE  (1u << 5)
-#define RK_DRM_HDMI_FC_INVIDCONF_DVI_1080P60 0x70
-#define RK_DRM_HDMI_FC_INVIDCONF_HDMI_1080P60 0x78
+#define RK_DRM_HDMI_FC_INVIDCONF_VSYNC_HIGH   0x40
+#define RK_DRM_HDMI_FC_INVIDCONF_HSYNC_HIGH   0x20
+#define RK_DRM_HDMI_FC_INVIDCONF_DE_HIGH      0x10
+#define RK_DRM_HDMI_FC_INVIDCONF_HDMI_MODE    0x08
+#define RK_DRM_HDMI_FC_INVIDCONF_R_V_BLANK_HIGH 0x02
+#define RK_DRM_HDMI_FC_INVIDCONF_INTERLACED   0x01
+#define RK_DRM_HDMI_FC_AVICONF1_PICTURE_ASPECT_4_3  (1u << 4)
 #define RK_DRM_HDMI_FC_AVICONF1_PICTURE_ASPECT_16_9 (2u << 4)
 #define RK_DRM_HDMI_FC_PACKET_TX_EN_AVI (1u << 2)
 #define RK_DRM_HDMI_FC_PACKET_TX_EN_GCP (1u << 1)
@@ -201,13 +206,55 @@
 #define RK_DRM_HDMI_PHY_I2C_MSM_CTRL         0x17
 #define RK_DRM_HDMI_PHY_I2C_TXTERM           0x19
 #define RK_DRM_HDMI_PHY_I2C_CKCALCTRL_OVERRIDE 0x8000
-#define RK_DRM_HDMI_PHY_148500_CPCE_CTRL     0x0051
-#define RK_DRM_HDMI_PHY_148500_GMPCTRL       0x0003
-#define RK_DRM_HDMI_PHY_148500_CURRCTRL      0x0000
-#define RK_DRM_HDMI_PHY_148500_MSM_CTRL      0x0006
-#define RK_DRM_HDMI_PHY_148500_TXTERM        0x0004
-#define RK_DRM_HDMI_PHY_148500_CKSYMTXCTRL   0x802b
-#define RK_DRM_HDMI_PHY_148500_VLEVCTRL      0x028d
+#define RK_DRM_HDMI_PHY_MSM_CTRL_FB_CLK      0x0006
+
+struct rk_drm_pll_rate {
+	uint32_t	clock_khz;
+	uint16_t	refdiv;
+	uint16_t	fbdiv;
+	uint16_t	postdiv1;
+	uint16_t	postdiv2;
+};
+
+struct rk_drm_mpll_config {
+	uint32_t	pixel_clock;
+	uint16_t	cpce;
+	uint16_t	gmp;
+	uint16_t	curr;
+};
+
+struct rk_drm_phy_config {
+	uint32_t	pixel_clock;
+	uint16_t	sym;
+	uint16_t	term;
+	uint16_t	vlev;
+};
+
+static const struct rk_drm_pll_rate rk_drm_pll_rates[] = {
+	{  27000, 1, 27, 6, 4 },
+	{  54000, 1, 54, 6, 4 },
+	{  65000, 1, 65, 6, 4 },
+	{  74250, 2, 99, 4, 4 },
+	{  96000, 1, 64, 4, 4 },
+	{ 106500, 1, 71, 4, 4 },
+	{ 148500, 4, 99, 4, 1 },
+};
+
+static const struct rk_drm_mpll_config rk_drm_mpll_configs[] = {
+	{  40000, 0x00b3, 0x0000, 0x0018 },
+	{  65000, 0x0072, 0x0001, 0x0028 },
+	{  66000, 0x013e, 0x0003, 0x0038 },
+	{  83500, 0x0072, 0x0001, 0x0028 },
+	{ 146250, 0x0051, 0x0002, 0x0038 },
+	{ 148500, 0x0051, 0x0003, 0x0000 },
+	{ 0,      0x0051, 0x0003, 0x0000 },
+};
+
+static const struct rk_drm_phy_config rk_drm_phy_configs[] = {
+	{  74250, 0x8009, 0x0004, 0x0272 },
+	{ 148500, 0x802b, 0x0004, 0x028d },
+	{ 0,      0x0000, 0x0000, 0x0000 },
+};
 
 static inline uint32_t
 rk_drm_vop_read4(struct rk_drm_softc *sc, size_t off)
@@ -221,12 +268,6 @@ rk_drm_vop_write4(struct rk_drm_softc *sc, size_t off, uint32_t val)
 	bus_space_write_4(fdtbus_bs_tag, sc->vop_bsh, off, val);
 	bus_space_barrier(fdtbus_bs_tag, sc->vop_bsh, off, 4,
 	    BUS_SPACE_BARRIER_WRITE);
-}
-
-static inline uint32_t
-rk_drm_grf_read4(struct rk_drm_softc *sc, size_t off)
-{
-	return (bus_space_read_4(fdtbus_bs_tag, sc->grf_bsh, off));
 }
 
 static inline void
@@ -311,6 +352,144 @@ rk_drm_hdmi_write1_safe(struct rk_drm_softc *sc, size_t off, uint8_t val)
 }
 
 static void
+rk_drm_default_mode_fill(struct drm_display_mode *mode)
+{
+	memset(mode, 0, sizeof(*mode));
+	mode->clock = RK_DRM_DEFAULT_CLOCK_KHZ;
+	mode->hdisplay = RK_DRM_DEFAULT_WIDTH;
+	mode->hsync_start = RK_DRM_DEFAULT_HSYNC_START;
+	mode->hsync_end = RK_DRM_DEFAULT_HSYNC_END;
+	mode->htotal = RK_DRM_DEFAULT_HTOTAL;
+	mode->vdisplay = RK_DRM_DEFAULT_HEIGHT;
+	mode->vsync_start = RK_DRM_DEFAULT_VSYNC_START;
+	mode->vsync_end = RK_DRM_DEFAULT_VSYNC_END;
+	mode->vtotal = RK_DRM_DEFAULT_VTOTAL;
+	mode->flags = DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+}
+
+static const struct rk_drm_pll_rate *
+rk_drm_find_pll_rate(uint32_t clock_khz)
+{
+	size_t i;
+
+	for (i = 0; i < nitems(rk_drm_pll_rates); i++) {
+		if (rk_drm_pll_rates[i].clock_khz == clock_khz)
+			return (&rk_drm_pll_rates[i]);
+	}
+	return (NULL);
+}
+
+static const struct rk_drm_mpll_config *
+rk_drm_find_mpll_config(uint32_t clock_khz)
+{
+	size_t i;
+
+	for (i = 0; rk_drm_mpll_configs[i].pixel_clock != 0; i++) {
+		if (clock_khz <= rk_drm_mpll_configs[i].pixel_clock)
+			return (&rk_drm_mpll_configs[i]);
+	}
+	return (NULL);
+}
+
+static const struct rk_drm_phy_config *
+rk_drm_find_phy_config(uint32_t clock_khz)
+{
+	size_t i;
+
+	for (i = 0; rk_drm_phy_configs[i].pixel_clock != 0; i++) {
+		if (clock_khz <= rk_drm_phy_configs[i].pixel_clock)
+			return (&rk_drm_phy_configs[i]);
+	}
+	return (NULL);
+}
+
+static inline uint16_t
+rk_drm_mode_hsync_len(const struct drm_display_mode *mode)
+{
+	return ((uint16_t)(mode->hsync_end - mode->hsync_start));
+}
+
+static inline uint16_t
+rk_drm_mode_vsync_len(const struct drm_display_mode *mode)
+{
+	return ((uint16_t)(mode->vsync_end - mode->vsync_start));
+}
+
+static inline uint16_t
+rk_drm_mode_hfront_porch(const struct drm_display_mode *mode)
+{
+	return ((uint16_t)(mode->hsync_start - mode->hdisplay));
+}
+
+static inline uint16_t
+rk_drm_mode_vfront_porch(const struct drm_display_mode *mode)
+{
+	return ((uint16_t)(mode->vsync_start - mode->vdisplay));
+}
+
+static inline uint16_t
+rk_drm_mode_hback_porch(const struct drm_display_mode *mode)
+{
+	return ((uint16_t)(mode->htotal - mode->hsync_end));
+}
+
+static inline uint16_t
+rk_drm_mode_vback_porch(const struct drm_display_mode *mode)
+{
+	return ((uint16_t)(mode->vtotal - mode->vsync_end));
+}
+
+static inline uint16_t
+rk_drm_mode_hblank(const struct drm_display_mode *mode)
+{
+	return ((uint16_t)(mode->htotal - mode->hdisplay));
+}
+
+static inline uint16_t
+rk_drm_mode_vblank(const struct drm_display_mode *mode)
+{
+	return ((uint16_t)(mode->vtotal - mode->vdisplay));
+}
+
+static inline uint16_t
+rk_drm_mode_hact_start(const struct drm_display_mode *mode)
+{
+	return ((uint16_t)(rk_drm_mode_hsync_len(mode) +
+	    rk_drm_mode_hback_porch(mode)));
+}
+
+static inline uint16_t
+rk_drm_mode_vact_start(const struct drm_display_mode *mode)
+{
+	return ((uint16_t)(rk_drm_mode_vsync_len(mode) +
+	    rk_drm_mode_vback_porch(mode)));
+}
+
+bool
+rk_drm_hw_mode_valid(const struct drm_display_mode *mode)
+{
+	if (mode == NULL)
+		return (false);
+	if (mode->clock == 0)
+		return (false);
+	if ((mode->flags & (DRM_MODE_FLAG_INTERLACE |
+	    DRM_MODE_FLAG_DBLSCAN)) != 0)
+		return (false);
+	if (mode->hdisplay <= 0 || mode->vdisplay <= 0)
+		return (false);
+	if (mode->hdisplay > RK_DRM_MAX_WIDTH ||
+	    mode->vdisplay > RK_DRM_MAX_HEIGHT)
+		return (false);
+	if (rk_drm_find_pll_rate(mode->clock) == NULL)
+		return (false);
+	if (rk_drm_find_mpll_config(mode->clock) == NULL)
+		return (false);
+	if (rk_drm_find_phy_config(mode->clock) == NULL)
+		return (false);
+	return (true);
+}
+
+static void
 rk_drm_fb_dma_cb(void *arg, bus_dma_segment_t *segs, int nseg, int error)
 {
 	bus_addr_t *fb_busaddr;
@@ -392,8 +571,6 @@ rk_drm_fb_fill(struct rk_drm_softc *sc, uint32_t color)
 	if (sc->fb_dma_tag != NULL && sc->fb_dma_map != NULL)
 		bus_dmamap_sync(sc->fb_dma_tag, sc->fb_dma_map,
 		    BUS_DMASYNC_PREWRITE);
-	else
-		cpu_dcache_wb_range((void *)sc->fb_va, round_page(sc->fb_size));
 }
 
 static void
@@ -442,13 +619,18 @@ rk_drm_route_vop_to_hdmi(struct rk_drm_softc *sc)
 }
 
 static int
-rk_drm_program_vpll_148500khz(struct rk_drm_softc *sc)
+rk_drm_program_vpll(struct rk_drm_softc *sc, uint32_t clock_khz)
 {
+	const struct rk_drm_pll_rate *rate;
 	const uint32_t con3_mask = (0x3u << 8) | RK_DRM_CRU_PLL_DSMPD |
 	    RK_DRM_CRU_PLL_BYPASS | RK_DRM_CRU_PLL_POWER_DOWN;
 	const uint32_t con1_mask = (0x7u << 12) | (0x7u << 8) | 0x3fu;
 	uint32_t con3;
 	int i;
+
+	rate = rk_drm_find_pll_rate(clock_khz);
+	if (rate == NULL)
+		return (EINVAL);
 
 	con3 = RK_DRM_CRU_PLL_MODE_SLOW | RK_DRM_CRU_PLL_DSMPD |
 	    RK_DRM_CRU_PLL_POWER_DOWN;
@@ -456,12 +638,12 @@ rk_drm_program_vpll_148500khz(struct rk_drm_softc *sc)
 	DELAY(2);
 
 	rk_drm_cru_write4(sc, RK_DRM_CRU_VPLL_CON0,
-	    (0x0fffu << 16) | RK_DRM_VPLL_148500_FBDIV);
+	    (0x0fffu << 16) | rate->fbdiv);
 	rk_drm_cru_write4(sc, RK_DRM_CRU_VPLL_CON1,
 	    (con1_mask << 16) |
-	    (RK_DRM_VPLL_148500_POSTDIV2 << 12) |
-	    (RK_DRM_VPLL_148500_POSTDIV1 << 8) |
-	    RK_DRM_VPLL_148500_REFDIV);
+	    (rate->postdiv2 << 12) |
+	    (rate->postdiv1 << 8) |
+	    rate->refdiv);
 	rk_drm_cru_write4(sc, RK_DRM_CRU_VPLL_CON2, 0x00000000);
 
 	con3 = RK_DRM_CRU_PLL_MODE_SLOW | RK_DRM_CRU_PLL_DSMPD;
@@ -493,11 +675,16 @@ rk_drm_vop_pulse_dclk_reset(struct rk_drm_softc *sc)
 }
 
 static void
-rk_drm_vop_init_1080p60(struct rk_drm_softc *sc)
+rk_drm_vop_init_mode(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
 {
+	uint32_t hact_start, vact_start;
 	uint32_t sys_ctrl, dsp_ctrl0, dsp_ctrl1;
 
-	if (rk_drm_program_vpll_148500khz(sc) != 0)
+	hact_start = rk_drm_mode_hact_start(mode);
+	vact_start = rk_drm_mode_vact_start(mode);
+
+	if (rk_drm_program_vpll(sc, mode->clock) != 0)
 		device_printf(sc->dev, "VPLL setup failed, continuing\n");
 
 	rk_drm_cru_write4(sc, 0x01bc,
@@ -534,30 +721,27 @@ rk_drm_vop_init_1080p60(struct rk_drm_softc *sc)
 	rk_drm_vop_write4(sc, 0x003c, sc->stride / 4);
 	rk_drm_vop_write4(sc, 0x0040, (uint32_t)sc->fb_pa);
 	rk_drm_vop_write4(sc, 0x0048,
-	    ((RK_DRM_MODE_HEIGHT - 1) << 16) | (RK_DRM_MODE_WIDTH - 1));
+	    (((uint32_t)mode->vdisplay - 1) << 16) |
+	    ((uint32_t)mode->hdisplay - 1));
 	rk_drm_vop_write4(sc, 0x004c,
-	    ((RK_DRM_MODE_HEIGHT - 1) << 16) | (RK_DRM_MODE_WIDTH - 1));
+	    (((uint32_t)mode->vdisplay - 1) << 16) |
+	    ((uint32_t)mode->hdisplay - 1));
 	rk_drm_vop_write4(sc, 0x0050,
-	    ((RK_DRM_MODE_VSYNC + RK_DRM_MODE_VBP) << 16) |
-	    (RK_DRM_MODE_HSYNC + RK_DRM_MODE_HBP));
+	    (vact_start << 16) | hact_start);
 	rk_drm_vop_write4(sc, 0x006c, RK_DRM_VOP_WIN0_CTRL2_PRIMARY);
 	rk_drm_vop_write4(sc, RK_DRM_VOP_POST_DSP_HACT_INFO,
-	    ((RK_DRM_MODE_HSYNC + RK_DRM_MODE_HBP) << 16) |
-	    (RK_DRM_MODE_HSYNC + RK_DRM_MODE_HBP + RK_DRM_MODE_WIDTH));
+	    (hact_start << 16) | (hact_start + mode->hdisplay));
 	rk_drm_vop_write4(sc, RK_DRM_VOP_POST_DSP_VACT_INFO,
-	    ((RK_DRM_MODE_VSYNC + RK_DRM_MODE_VBP) << 16) |
-	    (RK_DRM_MODE_VSYNC + RK_DRM_MODE_VBP + RK_DRM_MODE_HEIGHT));
+	    (vact_start << 16) | (vact_start + mode->vdisplay));
 	rk_drm_vop_write4(sc, 0x0030, RK_DRM_VOP_WIN0_CTRL0_ENABLE);
 	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_HTOTAL_HS_END,
-	    (2200 << 16) | RK_DRM_MODE_HSYNC);
+	    ((uint32_t)mode->htotal << 16) | rk_drm_mode_hsync_len(mode));
 	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_HACT_ST_END,
-	    ((RK_DRM_MODE_HSYNC + RK_DRM_MODE_HBP) << 16) |
-	    (RK_DRM_MODE_HSYNC + RK_DRM_MODE_HBP + RK_DRM_MODE_WIDTH));
+	    (hact_start << 16) | (hact_start + mode->hdisplay));
 	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_VTOTAL_VS_END,
-	    (1125 << 16) | RK_DRM_MODE_VSYNC);
+	    ((uint32_t)mode->vtotal << 16) | rk_drm_mode_vsync_len(mode));
 	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_VACT_ST_END,
-	    ((RK_DRM_MODE_VSYNC + RK_DRM_MODE_VBP) << 16) |
-	    (RK_DRM_MODE_VSYNC + RK_DRM_MODE_VBP + RK_DRM_MODE_HEIGHT));
+	    (vact_start << 16) | (vact_start + mode->vdisplay));
 	rk_drm_vop_write4(sc, 0x0000, 0x00000001);
 	rk_drm_vop_pulse_dclk_reset(sc);
 	DELAY(40000);
@@ -607,12 +791,68 @@ rk_drm_hdmi_clear_overflow(struct rk_drm_softc *sc)
 }
 
 static void
-rk_drm_hdmi_enable_dvi_mode(struct rk_drm_softc *sc)
+rk_drm_hdmi_program_av_composer(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode, bool hdmi_mode)
+{
+	uint8_t inv_val;
+	uint16_t vic;
+
+	inv_val = RK_DRM_HDMI_FC_INVIDCONF_DE_HIGH;
+	if ((mode->flags & DRM_MODE_FLAG_PVSYNC) != 0)
+		inv_val |= RK_DRM_HDMI_FC_INVIDCONF_VSYNC_HIGH;
+	if ((mode->flags & DRM_MODE_FLAG_PHSYNC) != 0)
+		inv_val |= RK_DRM_HDMI_FC_INVIDCONF_HSYNC_HIGH;
+	if ((mode->flags & DRM_MODE_FLAG_INTERLACE) != 0)
+		inv_val |= RK_DRM_HDMI_FC_INVIDCONF_R_V_BLANK_HIGH |
+		    RK_DRM_HDMI_FC_INVIDCONF_INTERLACED;
+	if (hdmi_mode)
+		inv_val |= RK_DRM_HDMI_FC_INVIDCONF_HDMI_MODE;
+
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_INVIDCONF, inv_val);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_INHACTV1, mode->hdisplay >> 8);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_INHACTV0, mode->hdisplay & 0xff);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_INVACTV1, mode->vdisplay >> 8);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_INVACTV0, mode->vdisplay & 0xff);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_INHBLANK1,
+	    rk_drm_mode_hblank(mode) >> 8);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_INHBLANK0,
+	    rk_drm_mode_hblank(mode) & 0xff);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_INVBLANK,
+	    rk_drm_mode_vblank(mode) & 0xff);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_HSYNCINDELAY1,
+	    rk_drm_mode_hfront_porch(mode) >> 8);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_HSYNCINDELAY0,
+	    rk_drm_mode_hfront_porch(mode) & 0xff);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_VSYNCINDELAY,
+	    rk_drm_mode_vfront_porch(mode) & 0xff);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_HSYNCINWIDTH1,
+	    rk_drm_mode_hsync_len(mode) >> 8);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_HSYNCINWIDTH0,
+	    rk_drm_mode_hsync_len(mode) & 0xff);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_VSYNCINWIDTH,
+	    rk_drm_mode_vsync_len(mode) & 0xff);
+
+	vic = drm_mode_cea_vic(mode);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AVIVID, vic & 0xff);
+}
+
+static uint8_t
+rk_drm_hdmi_picture_aspect(const struct drm_display_mode *mode)
+{
+	if ((mode->hdisplay * 9) == (mode->vdisplay * 16))
+		return (RK_DRM_HDMI_FC_AVICONF1_PICTURE_ASPECT_16_9);
+	if ((mode->hdisplay * 3) == (mode->vdisplay * 4))
+		return (RK_DRM_HDMI_FC_AVICONF1_PICTURE_ASPECT_4_3);
+	return (0);
+}
+
+static void
+rk_drm_hdmi_enable_dvi_mode(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
 {
 	uint8_t hdcpcfg0;
 
-	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_INVIDCONF,
-	    RK_DRM_HDMI_FC_INVIDCONF_DVI_1080P60);
+	rk_drm_hdmi_program_av_composer(sc, mode, false);
 	hdcpcfg0 = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_A_HDCPCFG0);
 	hdcpcfg0 &= ~RK_DRM_HDMI_A_HDCPCFG0_HDMIDVI;
 	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_A_HDCPCFG0, hdcpcfg0);
@@ -623,19 +863,22 @@ rk_drm_hdmi_enable_dvi_mode(struct rk_drm_softc *sc)
 }
 
 static void
-rk_drm_hdmi_enable_hdmi_mode(struct rk_drm_softc *sc)
+rk_drm_hdmi_enable_hdmi_mode(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
 {
 	uint8_t hdcpcfg0;
 	uint8_t pkt_en;
+	uint8_t aspect;
+	uint8_t vic;
 
-	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_INVIDCONF,
-	    RK_DRM_HDMI_FC_INVIDCONF_HDMI_1080P60);
+	rk_drm_hdmi_program_av_composer(sc, mode, true);
+	aspect = rk_drm_hdmi_picture_aspect(mode);
+	vic = drm_mode_cea_vic(mode);
 	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AVICONF3, 0x00);
 	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AVICONF0, 0x00);
-	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AVICONF1,
-	    RK_DRM_HDMI_FC_AVICONF1_PICTURE_ASPECT_16_9);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AVICONF1, aspect);
 	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AVICONF2, 0x00);
-	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AVIVID, RK_DRM_MODE_VIC);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AVIVID, vic);
 
 	pkt_en = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_FC_PACKET_TX_EN);
 	pkt_en |= RK_DRM_HDMI_FC_PACKET_TX_EN_AVI |
@@ -658,22 +901,10 @@ rk_drm_hdmi_enable_hdmi_mode(struct rk_drm_softc *sc)
 }
 
 static void
-rk_drm_dw_hdmi_init_1080p60(struct rk_drm_softc *sc)
+rk_drm_dw_hdmi_init_mode(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
 {
-	rk_drm_hdmi_enable_dvi_mode(sc);
-	rk_drm_hdmi_write1_safe(sc, 0x1001, 0x80);
-	rk_drm_hdmi_write1_safe(sc, 0x1002, 0x07);
-	rk_drm_hdmi_write1_safe(sc, 0x1003, 0x18);
-	rk_drm_hdmi_write1_safe(sc, 0x1004, 0x01);
-	rk_drm_hdmi_write1_safe(sc, 0x1005, 0x38);
-	rk_drm_hdmi_write1_safe(sc, 0x1006, 0x04);
-	rk_drm_hdmi_write1_safe(sc, 0x1007, 0x2d);
-	rk_drm_hdmi_write1_safe(sc, 0x1008, 0x58);
-	rk_drm_hdmi_write1_safe(sc, 0x1009, 0x00);
-	rk_drm_hdmi_write1_safe(sc, 0x100a, 0x2c);
-	rk_drm_hdmi_write1_safe(sc, 0x100b, 0x00);
-	rk_drm_hdmi_write1_safe(sc, 0x100c, 0x04);
-	rk_drm_hdmi_write1_safe(sc, 0x100d, 0x05);
+	rk_drm_hdmi_enable_dvi_mode(sc, mode);
 	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_FC_CTRLDUR, 12);
 	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_FC_EXCTRLDUR, 32);
 	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_FC_EXCTRLSPAC, 1);
@@ -685,13 +916,15 @@ rk_drm_dw_hdmi_init_1080p60(struct rk_drm_softc *sc)
 	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_FC_AVICONF0, 0x00);
 	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_FC_AVICONF1, 0x00);
 	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_FC_AVICONF2, 0x00);
-	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_FC_AVIVID, RK_DRM_MODE_VIC);
+	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_FC_AVIVID,
+	    drm_mode_cea_vic(mode));
 	rk_drm_hdmi_write1_safe(sc, 0x01ff, 0x00);
 	rk_drm_hdmi_write1_safe(sc, 0x0184, 0xfe);
 }
 
 static void
-rk_drm_dw_hdmi_finish_1080p60(struct rk_drm_softc *sc)
+rk_drm_dw_hdmi_finish_mode(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
 {
 	uint8_t clkdis;
 	uint8_t val;
@@ -712,7 +945,7 @@ rk_drm_dw_hdmi_finish_1080p60(struct rk_drm_softc *sc)
 	clkdis &= ~0x02;
 	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_MC_CLKDIS, clkdis);
 	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_FC_VSYNCINWIDTH,
-	    RK_DRM_MODE_VSYNC);
+	    rk_drm_mode_vsync_len(mode));
 
 	rk_drm_hdmi_write1_safe(sc, RK_DRM_HDMI_VP_PR_CD, 0x40);
 
@@ -826,11 +1059,19 @@ rk_drm_hdmi_phy_i2c_write(struct rk_drm_softc *sc, uint8_t reg, uint16_t val)
 }
 
 static int
-rk_drm_hdmi_phy_init(struct rk_drm_softc *sc)
+rk_drm_hdmi_phy_init(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
 {
+	const struct rk_drm_mpll_config *mpll_conf;
+	const struct rk_drm_phy_config *phy_conf;
 	uint8_t phy_conf0;
 	int iter;
 	int timeout;
+
+	mpll_conf = rk_drm_find_mpll_config(mode->clock);
+	phy_conf = rk_drm_find_phy_config(mode->clock);
+	if (mpll_conf == NULL || phy_conf == NULL)
+		return (EINVAL);
 
 	rk_drm_cru_write4(sc, 0x0240,
 	    (1u << 25) | (1u << 26) | (0 << 9) | (0 << 10));
@@ -893,28 +1134,28 @@ rk_drm_hdmi_phy_init(struct rk_drm_softc *sc)
 		DELAY(1000);
 
 		if (rk_drm_hdmi_phy_i2c_write(sc, RK_DRM_HDMI_PHY_I2C_CPCE_CTRL,
-		    RK_DRM_HDMI_PHY_148500_CPCE_CTRL) != 0)
+		    mpll_conf->cpce) != 0)
 			return (EIO);
 		if (rk_drm_hdmi_phy_i2c_write(sc, RK_DRM_HDMI_PHY_I2C_GMPCTRL,
-		    RK_DRM_HDMI_PHY_148500_GMPCTRL) != 0)
+		    mpll_conf->gmp) != 0)
 			return (EIO);
 		if (rk_drm_hdmi_phy_i2c_write(sc, RK_DRM_HDMI_PHY_I2C_CURRCTRL,
-		    RK_DRM_HDMI_PHY_148500_CURRCTRL) != 0)
+		    mpll_conf->curr) != 0)
 			return (EIO);
 		if (rk_drm_hdmi_phy_i2c_write(sc, RK_DRM_HDMI_PHY_I2C_PLLPHBYCTRL,
 		    0x0000) != 0)
 			return (EIO);
 		if (rk_drm_hdmi_phy_i2c_write(sc, RK_DRM_HDMI_PHY_I2C_MSM_CTRL,
-		    RK_DRM_HDMI_PHY_148500_MSM_CTRL) != 0)
+		    RK_DRM_HDMI_PHY_MSM_CTRL_FB_CLK) != 0)
 			return (EIO);
 		if (rk_drm_hdmi_phy_i2c_write(sc, RK_DRM_HDMI_PHY_I2C_TXTERM,
-		    RK_DRM_HDMI_PHY_148500_TXTERM) != 0)
+		    phy_conf->term) != 0)
 			return (EIO);
 		if (rk_drm_hdmi_phy_i2c_write(sc, RK_DRM_HDMI_PHY_I2C_CKSYMTXCTRL,
-		    RK_DRM_HDMI_PHY_148500_CKSYMTXCTRL) != 0)
+		    phy_conf->sym) != 0)
 			return (EIO);
 		if (rk_drm_hdmi_phy_i2c_write(sc, RK_DRM_HDMI_PHY_I2C_VLEVCTRL,
-		    RK_DRM_HDMI_PHY_148500_VLEVCTRL) != 0)
+		    phy_conf->vlev) != 0)
 			return (EIO);
 		if (rk_drm_hdmi_phy_i2c_write(sc, RK_DRM_HDMI_PHY_I2C_CKCALCTRL,
 		    RK_DRM_HDMI_PHY_I2C_CKCALCTRL_OVERRIDE) != 0)
@@ -940,7 +1181,8 @@ rk_drm_hdmi_phy_init(struct rk_drm_softc *sc)
 	}
 
 	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_MC_CLKDIS, 0x00);
-	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_VSYNCINWIDTH, RK_DRM_MODE_VSYNC);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_VSYNCINWIDTH,
+	    rk_drm_mode_vsync_len(mode));
 	rk_drm_hdmi_toggle_main_reset(sc,
 	    RK_DRM_HDMI_MC_SWRST_TMDS | RK_DRM_HDMI_MC_SWRST_PIXEL);
 
@@ -958,25 +1200,32 @@ rk_drm_hdmi_phy_init(struct rk_drm_softc *sc)
 }
 
 int
-rk_drm_hw_modeset(struct rk_drm_softc *sc)
+rk_drm_hw_modeset(struct rk_drm_softc *sc, const struct drm_display_mode *mode)
 {
+	struct drm_display_mode default_mode;
 	int error;
 
 	if (!sc->hw_attached)
 		return (ENXIO);
+	if (mode == NULL) {
+		rk_drm_default_mode_fill(&default_mode);
+		mode = &default_mode;
+	}
+	if (!rk_drm_hw_mode_valid(mode))
+		return (EINVAL);
 
 	rk_drm_fb_fill(sc, RK_DRM_FB_BOOT_COLOR);
 	rk_drm_display_domain_sanity(sc);
 	rk_drm_route_vop_to_hdmi(sc);
-	rk_drm_vop_init_1080p60(sc);
-	rk_drm_dw_hdmi_init_1080p60(sc);
-	error = rk_drm_hdmi_phy_init(sc);
+	rk_drm_vop_init_mode(sc, mode);
+	rk_drm_dw_hdmi_init_mode(sc, mode);
+	error = rk_drm_hdmi_phy_init(sc, mode);
 	if (error != 0) {
 		device_printf(sc->dev, "HDMI PHY init failed: %d\n", error);
 		return (error);
 	}
-	rk_drm_dw_hdmi_finish_1080p60(sc);
-	rk_drm_hdmi_enable_hdmi_mode(sc);
+	rk_drm_dw_hdmi_finish_mode(sc, mode);
+	rk_drm_hdmi_enable_hdmi_mode(sc, mode);
 	return (0);
 }
 
@@ -1015,10 +1264,11 @@ rk_drm_hw_unmap(struct rk_drm_softc *sc)
 int
 rk_drm_hw_attach(struct rk_drm_softc *sc)
 {
+	struct drm_display_mode default_mode;
 	int error;
 
-	sc->stride = RK_DRM_MODE_WIDTH * (RK_DRM_BPP / 8);
-	sc->fb_size = sc->stride * RK_DRM_MODE_HEIGHT;
+	sc->stride = RK_DRM_MAX_WIDTH * (RK_DRM_BPP / 8);
+	sc->fb_size = sc->stride * RK_DRM_MAX_HEIGHT;
 
 	error = rk_drm_fb_alloc(sc);
 	if (error != 0) {
@@ -1080,13 +1330,14 @@ rk_drm_hw_attach(struct rk_drm_softc *sc)
 	}
 
 	sc->hw_attached = true;
-	error = rk_drm_hw_modeset(sc);
+	rk_drm_default_mode_fill(&default_mode);
+	error = rk_drm_hw_modeset(sc, &default_mode);
 	if (error != 0)
 		goto fail;
 
 	device_printf(sc->dev,
-	    "fixed scanout ready %dx%d stride=%u fb_pa=0x%jx hpd=%d\n",
-	    RK_DRM_MODE_WIDTH, RK_DRM_MODE_HEIGHT, sc->stride,
+	    "initial scanout ready %dx%d stride=%u fb_pa=0x%jx hpd=%d\n",
+	    default_mode.hdisplay, default_mode.vdisplay, sc->stride,
 	    (uintmax_t)sc->fb_pa, rk_drm_hw_hpd(sc));
 	return (0);
 
