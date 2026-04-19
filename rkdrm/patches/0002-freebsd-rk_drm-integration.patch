@@ -1,0 +1,25 @@
+diff --git a/sys/conf/files.arm64 b/sys/conf/files.arm64
+index 45966fea8..fa3a8cf5a 100644
+--- a/sys/conf/files.arm64
++++ b/sys/conf/files.arm64
+@@ -727,6 +727,8 @@ arm64/qualcomm/qcom_gcc.c			optional qcom_gcc fdt
+ dev/qcom_mdio/qcom_mdio_ipq4018.c		optional qcom_mdio fdt mdio mii
+ 
+ # RockChip Drivers
++arm64/rockchip/rk_drm.c				optional fdt drm2 rk_drm soc_rockchip_rk3399
++arm64/rockchip/rk_drm_hw.c			optional fdt drm2 rk_drm soc_rockchip_rk3399
+ arm64/rockchip/rk3328_codec.c			optional fdt rk3328codec soc_rockchip_rk3328
+ arm64/rockchip/rk3399_emmcphy.c			optional fdt rk_emmcphy soc_rockchip_rk3399
+ arm64/rockchip/rk3568_combphy.c			optional fdt rk_combphy soc_rockchip_rk3568
+diff --git a/sys/modules/rockchip/Makefile b/sys/modules/rockchip/Makefile
+index 3463f2538..20c050dcc 100644
+--- a/sys/modules/rockchip/Makefile
++++ b/sys/modules/rockchip/Makefile
+@@ -1,6 +1,7 @@
+ # Build modules specific to RockChip.
+ 
+ SUBDIR = \
++	rk_drm \
+ 	rk_i2c \
+ 	rk805 \
+ 	rk808 \
