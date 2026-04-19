@@ -1,0 +1,1134 @@
+/*-
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Copyright (c) 2026 Kyle T. Crenshaw
+ * All rights reserved.
+ *
+ * Phase-2 DRM/KMS fixed-mode bring-up for RK3399 on FreeBSD's drm2 stack.
+ *
+ * This phase is still intentionally narrow:
+ * - one fixed HDMI-A connector
+ * - one TMDS encoder
+ * - one CRTC
+ * - one fixed 1920x1080p60 mode
+ *
+ * It is no longer just an object-model scaffold:
+ * - fixed-mode hardware bring-up is now owned by rk_drm
+ * - one internal scanout buffer is allocated and programmed into WIN0
+ *
+ * It is still not a full display driver:
+ * - no GEM/dumb buffers yet
+ * - no EDID-based mode list yet
+ * - no hotplug policy beyond raw HPD
+ * - fbdev/vt is currently a helper-backed bridge over the fixed scanout buffer
+ *
+ * The purpose of this stage is to move the Rockchip DRM bring-up into the
+ * FreeBSD kernel tree so it can link against drm2 through the normal kernel
+ * build, instead of trying to load as an out-of-tree KLD.
+ */
+
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/bus.h>
+#include <sys/fbio.h>
+#include <sys/kernel.h>
+#include <sys/malloc.h>
+#include <sys/module.h>
+#include <sys/pctrie.h>
+#include <sys/vmem.h>
+
+#include <machine/bus.h>
+#include <vm/vm.h>
+#include <vm/pmap.h>
+#include <vm/vm_pageout.h>
+#include <vm/vm_radix.h>
+
+#include <dev/drm2/drmP.h>
+#include <dev/drm2/drm_crtc.h>
+#include <dev/drm2/drm_crtc_helper.h>
+#include <dev/drm2/drm_fb_helper.h>
+#include <dev/ofw/ofw_bus.h>
+#include <dev/ofw/ofw_bus_subr.h>
+
+#include "rk_drm.h"
+#include "fb_if.h"
+
+static struct ofw_compat_data rk_drm_compat_data[] = {
+	{ "rockchip,display-subsystem", 1 },
+	{ NULL, 0 }
+};
+
+struct rk_drm_fbdev {
+	struct drm_framebuffer	drm_fb;
+	struct drm_fb_helper	fb_helper;
+};
+
+struct rk_drm_bo {
+	struct drm_gem_object	gem_obj;
+	vm_paddr_t		pbase;
+	vm_offset_t		vbase;
+	size_t			npages;
+	vm_page_t		*m;
+	vm_object_t		cdev_pager;
+};
+
+struct rk_drm_fb {
+	struct drm_framebuffer	drm_fb;
+	struct rk_drm_bo	**planes;
+	int			nplanes;
+};
+
+static void rk_drm_fbdev_destroy(struct rk_drm_softc *sc);
+static int rk_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
+    struct drm_framebuffer *old_fb);
+
+static void
+rk_drm_output_poll_changed(struct drm_device *drm_dev)
+{
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(drm_dev->dev);
+	if (sc->fbdev != NULL)
+		drm_fb_helper_hotplug_event(&sc->fbdev->fb_helper);
+}
+
+static void
+rk_drm_fixedfb_destroy(struct drm_framebuffer *drm_fb)
+{
+	(void)drm_fb;
+	drm_framebuffer_cleanup(drm_fb);
+}
+
+static int
+rk_drm_fixedfb_create_handle(struct drm_framebuffer *drm_fb,
+    struct drm_file *file_priv, unsigned int *handle)
+{
+	(void)drm_fb;
+	(void)file_priv;
+	(void)handle;
+	return (-ENODEV);
+}
+
+static const struct drm_framebuffer_funcs rk_drm_fixedfb_funcs = {
+	.destroy = rk_drm_fixedfb_destroy,
+	.create_handle = rk_drm_fixedfb_create_handle,
+};
+
+static int
+rk_drm_fixedfb_alloc(struct drm_device *drm_dev,
+    struct drm_mode_fb_cmd2 *mode_cmd, struct rk_drm_fbdev *fbdev)
+{
+	int error;
+
+	drm_helper_mode_fill_fb_struct(&fbdev->drm_fb, mode_cmd);
+	error = drm_framebuffer_init(drm_dev, &fbdev->drm_fb,
+	    &rk_drm_fixedfb_funcs);
+	if (error != 0)
+		device_printf(drm_dev->dev,
+		    "Cannot initialize fixed DRM framebuffer: %d\n", error);
+	return (error);
+}
+
+static void
+rk_drm_bo_destruct(struct rk_drm_bo *bo)
+{
+	struct pctrie_iter pages;
+	vm_page_t m;
+	size_t size;
+	int i;
+
+	if (bo->cdev_pager == NULL)
+		return;
+
+	size = round_page(bo->gem_obj.size);
+	if (bo->vbase != 0)
+		pmap_qremove(bo->vbase, bo->npages);
+
+	vm_page_iter_init(&pages, bo->cdev_pager);
+	VM_OBJECT_WLOCK(bo->cdev_pager);
+	for (i = 0; i < bo->npages; i++) {
+		m = vm_radix_iter_lookup(&pages, i);
+		vm_page_busy_acquire(m, 0);
+		cdev_mgtdev_pager_free_page(&pages, m);
+		m->flags &= ~PG_FICTITIOUS;
+		vm_page_unwire_noq(m);
+		vm_page_free(m);
+	}
+	VM_OBJECT_WUNLOCK(bo->cdev_pager);
+
+	vm_object_deallocate(bo->cdev_pager);
+	if (bo->vbase != 0)
+		vmem_free(kernel_arena, bo->vbase, size);
+}
+
+static void
+rk_drm_bo_free_object(struct drm_gem_object *gem_obj)
+{
+	struct rk_drm_bo *bo;
+
+	bo = container_of(gem_obj, struct rk_drm_bo, gem_obj);
+	drm_gem_free_mmap_offset(gem_obj);
+	drm_gem_object_release(gem_obj);
+	rk_drm_bo_destruct(bo);
+	free(bo->m, DRM_MEM_DRIVER);
+	free(bo, DRM_MEM_DRIVER);
+}
+
+static int
+rk_drm_bo_alloc_contig(size_t npages, u_long alignment, vm_memattr_t memattr,
+    vm_page_t **ret_page)
+{
+	vm_page_t m;
+	int err, i, tries;
+	vm_paddr_t low, high, boundary;
+
+	low = 0;
+	high = RK_DRM_FB_DMA_LOWADDR_TEST;
+	boundary = 0;
+	tries = 0;
+retry:
+	m = vm_page_alloc_noobj_contig(VM_ALLOC_WIRED | VM_ALLOC_ZERO, npages,
+	    low, high, alignment, boundary, memattr);
+	if (m == NULL) {
+		if (tries < 3) {
+			err = vm_page_reclaim_contig(0, npages, low, high,
+			    alignment, boundary);
+			if (err == ENOMEM)
+				vm_wait(NULL);
+			else if (err != 0)
+				return (ENOMEM);
+			tries++;
+			goto retry;
+		}
+		return (ENOMEM);
+	}
+
+	for (i = 0; i < npages; i++, m++) {
+		m->valid = VM_PAGE_BITS_ALL;
+		(*ret_page)[i] = m;
+	}
+
+	return (0);
+}
+
+static int
+rk_drm_bo_init_pager(struct rk_drm_bo *bo)
+{
+	struct pctrie_iter pages;
+	vm_page_t m;
+	size_t size;
+	int i;
+
+	size = round_page(bo->gem_obj.size);
+	bo->pbase = VM_PAGE_TO_PHYS(bo->m[0]);
+	if (vmem_alloc(kernel_arena, size, M_WAITOK | M_BESTFIT, &bo->vbase))
+		return (ENOMEM);
+
+	vm_page_iter_init(&pages, bo->cdev_pager);
+	VM_OBJECT_WLOCK(bo->cdev_pager);
+	for (i = 0; i < bo->npages; i++) {
+		m = bo->m[i];
+		m->oflags &= ~VPO_UNMANAGED;
+		m->flags |= PG_FICTITIOUS;
+		if (vm_page_iter_insert(m, bo->cdev_pager, i, &pages) != 0) {
+			VM_OBJECT_WUNLOCK(bo->cdev_pager);
+			return (EINVAL);
+		}
+	}
+	VM_OBJECT_WUNLOCK(bo->cdev_pager);
+
+	pmap_qenter(bo->vbase, bo->m, bo->npages);
+	return (0);
+}
+
+static int
+rk_drm_bo_alloc(struct drm_device *drm_dev, struct rk_drm_bo *bo)
+{
+	size_t size;
+	int error;
+
+	size = bo->gem_obj.size;
+	bo->npages = atop(size);
+	bo->m = malloc(sizeof(vm_page_t *) * bo->npages, DRM_MEM_DRIVER,
+	    M_WAITOK | M_ZERO);
+
+	error = rk_drm_bo_alloc_contig(bo->npages, PAGE_SIZE,
+	    VM_MEMATTR_WRITE_COMBINING, &bo->m);
+	if (error != 0) {
+		device_printf(drm_dev->dev,
+		    "Cannot allocate Rockchip GEM buffer: %d\n", error);
+		return (error);
+	}
+	error = rk_drm_bo_init_pager(bo);
+	if (error != 0) {
+		device_printf(drm_dev->dev,
+		    "Cannot initialize Rockchip GEM pager: %d\n", error);
+		return (error);
+	}
+	return (0);
+}
+
+static int
+rk_drm_bo_create(struct drm_device *drm_dev, size_t size,
+    struct rk_drm_bo **res_bo)
+{
+	struct rk_drm_bo *bo;
+	int error;
+
+	if (size == 0)
+		return (-EINVAL);
+
+	bo = malloc(sizeof(*bo), DRM_MEM_DRIVER, M_WAITOK | M_ZERO);
+	size = round_page(size);
+
+	error = drm_gem_object_init(drm_dev, &bo->gem_obj, size);
+	if (error != 0) {
+		free(bo, DRM_MEM_DRIVER);
+		return (error);
+	}
+	error = drm_gem_create_mmap_offset(&bo->gem_obj);
+	if (error != 0) {
+		drm_gem_object_release(&bo->gem_obj);
+		free(bo, DRM_MEM_DRIVER);
+		return (error);
+	}
+
+	bo->cdev_pager = cdev_pager_allocate(&bo->gem_obj, OBJT_MGTDEVICE,
+	    drm_dev->driver->gem_pager_ops, size, 0, 0, NULL);
+	error = rk_drm_bo_alloc(drm_dev, bo);
+	if (error != 0) {
+		rk_drm_bo_free_object(&bo->gem_obj);
+		return (error);
+	}
+
+	*res_bo = bo;
+	return (0);
+}
+
+static int
+rk_drm_bo_create_with_handle(struct drm_file *file_priv,
+    struct drm_device *drm_dev, size_t size, uint32_t *handle,
+    struct rk_drm_bo **res_bo)
+{
+	struct rk_drm_bo *bo;
+	int error;
+
+	error = rk_drm_bo_create(drm_dev, size, &bo);
+	if (error != 0)
+		return (error);
+
+	error = drm_gem_handle_create(file_priv, &bo->gem_obj, handle);
+	if (error != 0) {
+		rk_drm_bo_free_object(&bo->gem_obj);
+		drm_gem_object_release(&bo->gem_obj);
+		return (error);
+	}
+
+	drm_gem_object_unreference_unlocked(&bo->gem_obj);
+	*res_bo = bo;
+	return (0);
+}
+
+static int
+rk_drm_bo_dumb_create(struct drm_file *file_priv, struct drm_device *drm_dev,
+    struct drm_mode_create_dumb *args)
+{
+	struct rk_drm_bo *bo;
+
+	args->pitch = (args->width * args->bpp + 7) / 8;
+	args->pitch = roundup(args->pitch, 64);
+	args->size = args->pitch * args->height;
+	return (rk_drm_bo_create_with_handle(file_priv, drm_dev, args->size,
+	    &args->handle, &bo));
+}
+
+static int
+rk_drm_bo_dumb_map_offset(struct drm_file *file_priv,
+    struct drm_device *drm_dev, uint32_t handle, uint64_t *offset)
+{
+	struct drm_gem_object *gem_obj;
+	int error;
+
+	DRM_LOCK(drm_dev);
+	gem_obj = drm_gem_object_lookup(drm_dev, file_priv, handle);
+	if (gem_obj == NULL) {
+		DRM_UNLOCK(drm_dev);
+		return (-EINVAL);
+	}
+	error = drm_gem_create_mmap_offset(gem_obj);
+	if (error != 0) {
+		drm_gem_object_unreference(gem_obj);
+		DRM_UNLOCK(drm_dev);
+		return (error);
+	}
+
+	*offset = DRM_GEM_MAPPING_OFF(gem_obj->map_list.key) |
+	    DRM_GEM_MAPPING_KEY;
+	drm_gem_object_unreference(gem_obj);
+	DRM_UNLOCK(drm_dev);
+	return (0);
+}
+
+static int
+rk_drm_bo_dumb_destroy(struct drm_file *file_priv,
+    struct drm_device *drm_dev, uint32_t handle)
+{
+	return (drm_gem_handle_delete(file_priv, handle));
+}
+
+static int
+rk_drm_gem_pager_fault(vm_object_t vm_obj, vm_ooffset_t offset, int prot,
+    vm_page_t *mres)
+{
+	(void)vm_obj;
+	(void)offset;
+	(void)prot;
+	(void)mres;
+	return (VM_PAGER_FAIL);
+}
+
+static int
+rk_drm_gem_pager_ctor(void *handle, vm_ooffset_t size, vm_prot_t prot,
+    vm_ooffset_t foff, struct ucred *cred, u_short *color)
+{
+	(void)handle;
+	(void)size;
+	(void)prot;
+	(void)foff;
+	(void)cred;
+	if (color != NULL)
+		*color = 0;
+	return (0);
+}
+
+static void
+rk_drm_gem_pager_dtor(void *handle)
+{
+	(void)handle;
+}
+
+static struct cdev_pager_ops rk_drm_gem_pager_ops = {
+	.cdev_pg_fault = rk_drm_gem_pager_fault,
+	.cdev_pg_ctor = rk_drm_gem_pager_ctor,
+	.cdev_pg_dtor = rk_drm_gem_pager_dtor,
+};
+
+static void
+rk_drm_gem_fb_destroy(struct drm_framebuffer *drm_fb)
+{
+	struct rk_drm_fb *fb;
+	unsigned int i;
+
+	fb = container_of(drm_fb, struct rk_drm_fb, drm_fb);
+	for (i = 0; i < fb->nplanes; i++) {
+		if (fb->planes[i] != NULL)
+			drm_gem_object_unreference_unlocked(&fb->planes[i]->gem_obj);
+	}
+	drm_framebuffer_cleanup(drm_fb);
+	free(fb->planes, DRM_MEM_DRIVER);
+	free(fb, DRM_MEM_DRIVER);
+}
+
+static int
+rk_drm_gem_fb_create_handle(struct drm_framebuffer *drm_fb,
+    struct drm_file *file_priv, unsigned int *handle)
+{
+	struct rk_drm_fb *fb;
+
+	fb = container_of(drm_fb, struct rk_drm_fb, drm_fb);
+	return (drm_gem_handle_create(file_priv, &fb->planes[0]->gem_obj,
+	    handle));
+}
+
+static const struct drm_framebuffer_funcs rk_drm_gem_fb_funcs = {
+	.destroy = rk_drm_gem_fb_destroy,
+	.create_handle = rk_drm_gem_fb_create_handle,
+};
+
+static int
+rk_drm_gem_fb_alloc(struct drm_device *drm_dev,
+    struct drm_mode_fb_cmd2 *mode_cmd, struct rk_drm_bo **planes,
+    int num_planes, struct rk_drm_fb **res_fb)
+{
+	struct rk_drm_fb *fb;
+	int i, error;
+
+	fb = malloc(sizeof(*fb), DRM_MEM_DRIVER, M_WAITOK | M_ZERO);
+	fb->planes = malloc(num_planes * sizeof(*fb->planes), DRM_MEM_DRIVER,
+	    M_WAITOK | M_ZERO);
+	fb->nplanes = num_planes;
+
+	drm_helper_mode_fill_fb_struct(&fb->drm_fb, mode_cmd);
+	for (i = 0; i < num_planes; i++)
+		fb->planes[i] = planes[i];
+	error = drm_framebuffer_init(drm_dev, &fb->drm_fb, &rk_drm_gem_fb_funcs);
+	if (error != 0) {
+		free(fb->planes, DRM_MEM_DRIVER);
+		free(fb, DRM_MEM_DRIVER);
+		device_printf(drm_dev->dev,
+		    "Cannot initialize GEM framebuffer: %d\n", error);
+		return (error);
+	}
+
+	*res_fb = fb;
+	return (0);
+}
+
+static int
+rk_drm_fb_get_paddr_stride(struct rk_drm_softc *sc,
+    struct drm_framebuffer *drm_fb, vm_paddr_t *paddr, uint32_t *stride)
+{
+	struct rk_drm_fb *fb;
+
+	if (drm_fb == NULL)
+		return (ENXIO);
+	if (sc->fbdev != NULL && drm_fb == &sc->fbdev->drm_fb) {
+		*paddr = sc->fb_pa;
+		*stride = sc->stride;
+		return (0);
+	}
+
+	fb = container_of(drm_fb, struct rk_drm_fb, drm_fb);
+	if (fb->nplanes < 1 || fb->planes[0] == NULL)
+		return (ENXIO);
+
+	*paddr = fb->planes[0]->pbase;
+	*stride = fb->drm_fb.pitches[0];
+	return (0);
+}
+
+static int
+rk_drm_fb_probe(struct drm_fb_helper *helper,
+    struct drm_fb_helper_surface_size *sizes)
+{
+	struct rk_drm_softc *sc;
+	struct rk_drm_fbdev *fbdev;
+	struct drm_mode_fb_cmd2 mode_cmd;
+	struct fb_info *info;
+	int error;
+
+	if (helper->fb != NULL)
+		return (0);
+
+	sc = device_get_softc(helper->dev->dev);
+	fbdev = sc->fbdev;
+	if (fbdev == NULL)
+		return (-ENXIO);
+
+	info = framebuffer_alloc();
+	if (info == NULL)
+		return (-ENOMEM);
+
+	memset(&mode_cmd, 0, sizeof(mode_cmd));
+	mode_cmd.width = sizes->surface_width;
+	mode_cmd.height = sizes->surface_height;
+	mode_cmd.pitches[0] = sc->stride;
+	mode_cmd.pixel_format = drm_mode_legacy_fb_format(
+	    sizes->surface_bpp, sizes->surface_depth);
+
+	error = rk_drm_fixedfb_alloc(helper->dev, &mode_cmd, fbdev);
+	if (error != 0) {
+		framebuffer_release(info);
+		return (error);
+	}
+
+	helper->fb = &fbdev->drm_fb;
+	helper->fbdev = info;
+
+	info->fb_vbase = sc->fb_va;
+	info->fb_pbase = sc->fb_pa;
+	info->fb_size = sc->fb_size;
+	info->fb_bpp = sizes->surface_bpp;
+	info->fb_flags |= FB_FLAG_MEMATTR;
+	info->fb_memattr = VM_MEMATTR_UNCACHEABLE;
+	drm_fb_helper_fill_fix(info, fbdev->drm_fb.pitches[0],
+	    fbdev->drm_fb.depth);
+	drm_fb_helper_fill_var(info, helper, fbdev->drm_fb.width,
+	    fbdev->drm_fb.height);
+
+	return (1);
+}
+
+static struct drm_fb_helper_funcs rk_drm_fb_helper_funcs = {
+	.fb_probe = rk_drm_fb_probe,
+};
+
+static struct fb_info *
+rk_drm_fb_getinfo(struct drm_device *drm_dev)
+{
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(drm_dev->dev);
+	if (sc->fbdev == NULL)
+		return (NULL);
+	return (sc->fbdev->fb_helper.fbdev);
+}
+
+static struct fb_info *
+rk_drm_fb_helper_getinfo(device_t dev)
+{
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(dev);
+	if (sc->fbdev == NULL)
+		return (NULL);
+	return (rk_drm_fb_getinfo(&sc->drm_dev));
+}
+
+static int
+rk_drm_fbdev_init(struct rk_drm_softc *sc)
+{
+	struct rk_drm_fbdev *fbdev;
+	int error;
+
+	fbdev = malloc(sizeof(*fbdev), DRM_MEM_DRIVER, M_WAITOK | M_ZERO);
+	sc->fbdev = fbdev;
+	fbdev->fb_helper.funcs = &rk_drm_fb_helper_funcs;
+
+	error = drm_fb_helper_init(&sc->drm_dev, &fbdev->fb_helper,
+	    sc->drm_dev.mode_config.num_crtc,
+	    sc->drm_dev.mode_config.num_connector);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "Cannot initialize DRM fb helper: %d\n", error);
+		free(fbdev, DRM_MEM_DRIVER);
+		sc->fbdev = NULL;
+		return (error);
+	}
+
+	error = drm_fb_helper_single_add_all_connectors(&fbdev->fb_helper);
+	if (error != 0) {
+		device_printf(sc->dev, "Cannot add connectors to fb helper: %d\n",
+		    error);
+		rk_drm_fbdev_destroy(sc);
+		return (error);
+	}
+
+	error = drm_fb_helper_initial_config(&fbdev->fb_helper, RK_DRM_BPP);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "Cannot set initial DRM fb helper config: %d\n", error);
+		rk_drm_fbdev_destroy(sc);
+		return (error);
+	}
+
+	return (0);
+}
+
+static void
+rk_drm_fbdev_destroy(struct rk_drm_softc *sc)
+{
+	struct rk_drm_fbdev *fbdev;
+	struct fb_info *info;
+
+	fbdev = sc->fbdev;
+	if (fbdev == NULL)
+		return;
+
+	info = fbdev->fb_helper.fbdev;
+	if (info != NULL && info->fb_fbd_dev != NULL)
+		device_delete_child(sc->dev, info->fb_fbd_dev);
+	if (fbdev->fb_helper.fb != NULL)
+		drm_framebuffer_remove(&fbdev->drm_fb);
+	if (info != NULL)
+		framebuffer_release(info);
+	drm_fb_helper_fini(&fbdev->fb_helper);
+	free(fbdev, DRM_MEM_DRIVER);
+	sc->fbdev = NULL;
+}
+
+static int
+rk_drm_fb_create(struct drm_device *drm_dev, struct drm_file *file_priv,
+    struct drm_mode_fb_cmd2 *cmd, struct drm_framebuffer **fb)
+{
+	struct drm_gem_object *gem_obj;
+	struct rk_drm_bo *planes[4];
+	struct rk_drm_fb *rkfb;
+	int hsub, vsub, nplanes;
+	int width, height, size, cpp;
+	int i, error;
+
+	if (cmd->pixel_format != DRM_FORMAT_XRGB8888 &&
+	    cmd->pixel_format != DRM_FORMAT_ARGB8888)
+		return (-EINVAL);
+
+	hsub = drm_format_horz_chroma_subsampling(cmd->pixel_format);
+	vsub = drm_format_vert_chroma_subsampling(cmd->pixel_format);
+	nplanes = drm_format_num_planes(cmd->pixel_format);
+	memset(planes, 0, sizeof(planes));
+
+	for (i = 0; i < nplanes; i++) {
+		width = cmd->width;
+		height = cmd->height;
+		if (i != 0) {
+			width /= hsub;
+			height /= vsub;
+		}
+
+		gem_obj = drm_gem_object_lookup(drm_dev, file_priv,
+		    cmd->handles[i]);
+		if (gem_obj == NULL) {
+			error = -ENXIO;
+			goto fail;
+		}
+
+		cpp = drm_format_plane_cpp(cmd->pixel_format, i);
+		size = (height - 1) * cmd->pitches[i] +
+		    width * cpp + cmd->offsets[i];
+		if (gem_obj->size < size) {
+			drm_gem_object_unreference_unlocked(gem_obj);
+			error = -EINVAL;
+			goto fail;
+		}
+		planes[i] = container_of(gem_obj, struct rk_drm_bo, gem_obj);
+	}
+
+	error = rk_drm_gem_fb_alloc(drm_dev, cmd, planes, nplanes, &rkfb);
+	if (error != 0)
+		goto fail;
+
+	*fb = &rkfb->drm_fb;
+	return (0);
+
+fail:
+	while (i-- > 0) {
+		if (planes[i] != NULL)
+			drm_gem_object_unreference_unlocked(&planes[i]->gem_obj);
+	}
+	return (error);
+}
+
+static const struct drm_mode_config_funcs rk_drm_mode_config_funcs = {
+	.fb_create = rk_drm_fb_create,
+	.output_poll_changed = rk_drm_output_poll_changed,
+};
+
+static void
+rk_drm_crtc_reset(struct drm_crtc *crtc)
+{
+}
+
+static void
+rk_drm_crtc_destroy(struct drm_crtc *crtc)
+{
+	drm_crtc_cleanup(crtc);
+}
+
+static int
+rk_drm_crtc_set_config(struct drm_mode_set *set)
+{
+	return (drm_crtc_helper_set_config(set));
+}
+
+static const struct drm_crtc_funcs rk_drm_crtc_funcs = {
+	.reset = rk_drm_crtc_reset,
+	.destroy = rk_drm_crtc_destroy,
+	.set_config = rk_drm_crtc_set_config,
+};
+
+static bool
+rk_drm_crtc_mode_fixup(struct drm_crtc *crtc,
+    const struct drm_display_mode *mode, struct drm_display_mode *adjusted_mode)
+{
+	return (true);
+}
+
+static int
+rk_drm_crtc_mode_set(struct drm_crtc *crtc, struct drm_display_mode *mode,
+    struct drm_display_mode *adjusted_mode, int x, int y,
+    struct drm_framebuffer *old_fb)
+{
+	struct rk_drm_softc *sc;
+	int error;
+
+	sc = device_get_softc(crtc->dev->dev);
+	error = rk_drm_hw_modeset(sc);
+	if (error != 0)
+		return (-error);
+	if (crtc->fb == NULL)
+		return (0);
+	return (rk_drm_crtc_mode_set_base(crtc, x, y, old_fb));
+}
+
+static int
+rk_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
+    struct drm_framebuffer *old_fb)
+{
+	struct rk_drm_softc *sc;
+	vm_paddr_t paddr;
+	uint32_t stride;
+	int error;
+
+	if (x != 0 || y != 0)
+		return (-EINVAL);
+
+	sc = device_get_softc(crtc->dev->dev);
+	error = rk_drm_fb_get_paddr_stride(sc, crtc->fb, &paddr, &stride);
+	if (error != 0)
+		return (-error);
+	error = rk_drm_hw_set_scanout(sc, paddr, stride);
+	if (error != 0)
+		return (-error);
+	return (0);
+}
+
+static void
+rk_drm_crtc_dpms(struct drm_crtc *crtc, int mode)
+{
+}
+
+static void
+rk_drm_crtc_prepare(struct drm_crtc *crtc)
+{
+}
+
+static void
+rk_drm_crtc_commit(struct drm_crtc *crtc)
+{
+}
+
+static void
+rk_drm_crtc_disable(struct drm_crtc *crtc)
+{
+}
+
+static const struct drm_crtc_helper_funcs rk_drm_crtc_helper_funcs = {
+	.dpms = rk_drm_crtc_dpms,
+	.prepare = rk_drm_crtc_prepare,
+	.commit = rk_drm_crtc_commit,
+	.mode_fixup = rk_drm_crtc_mode_fixup,
+	.mode_set = rk_drm_crtc_mode_set,
+	.mode_set_base = rk_drm_crtc_mode_set_base,
+	.disable = rk_drm_crtc_disable,
+};
+
+static void
+rk_drm_encoder_destroy(struct drm_encoder *encoder)
+{
+	drm_encoder_cleanup(encoder);
+}
+
+static const struct drm_encoder_funcs rk_drm_encoder_funcs = {
+	.destroy = rk_drm_encoder_destroy,
+};
+
+static bool
+rk_drm_encoder_mode_fixup(struct drm_encoder *encoder,
+    const struct drm_display_mode *mode, struct drm_display_mode *adjusted_mode)
+{
+	return (true);
+}
+
+static void
+rk_drm_encoder_dpms(struct drm_encoder *encoder, int mode)
+{
+}
+
+static void
+rk_drm_encoder_prepare(struct drm_encoder *encoder)
+{
+}
+
+static void
+rk_drm_encoder_commit(struct drm_encoder *encoder)
+{
+}
+
+static void
+rk_drm_encoder_mode_set(struct drm_encoder *encoder,
+    struct drm_display_mode *mode, struct drm_display_mode *adjusted_mode)
+{
+}
+
+static void
+rk_drm_encoder_disable(struct drm_encoder *encoder)
+{
+}
+
+static const struct drm_encoder_helper_funcs rk_drm_encoder_helper_funcs = {
+	.dpms = rk_drm_encoder_dpms,
+	.mode_fixup = rk_drm_encoder_mode_fixup,
+	.prepare = rk_drm_encoder_prepare,
+	.commit = rk_drm_encoder_commit,
+	.mode_set = rk_drm_encoder_mode_set,
+	.disable = rk_drm_encoder_disable,
+};
+
+static enum drm_connector_status
+rk_drm_connector_detect(struct drm_connector *connector, bool force)
+{
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(connector->dev->dev);
+	return (rk_drm_hw_hpd(sc) ? connector_status_connected :
+	    connector_status_disconnected);
+}
+
+static void
+rk_drm_connector_dpms(struct drm_connector *connector, int mode)
+{
+}
+
+static int
+rk_drm_connector_fill_modes(struct drm_connector *connector, uint32_t max_width,
+    uint32_t max_height)
+{
+	return (drm_helper_probe_single_connector_modes(connector,
+	    max_width, max_height));
+}
+
+static void
+rk_drm_connector_destroy(struct drm_connector *connector)
+{
+	drm_connector_cleanup(connector);
+}
+
+static const struct drm_connector_funcs rk_drm_connector_funcs = {
+	.dpms = rk_drm_connector_dpms,
+	.detect = rk_drm_connector_detect,
+	.fill_modes = rk_drm_connector_fill_modes,
+	.destroy = rk_drm_connector_destroy,
+};
+
+static int
+rk_drm_connector_get_modes(struct drm_connector *connector)
+{
+	struct drm_device *drm_dev;
+	struct drm_display_mode *mode;
+
+	drm_dev = connector->dev;
+	mode = drm_mode_create(drm_dev);
+	if (mode == NULL)
+		return (0);
+
+	mode->clock = RK_DRM_MODE_CLOCK_KHZ;
+	mode->hdisplay = RK_DRM_MODE_WIDTH;
+	mode->hsync_start = RK_DRM_MODE_HSYNC_START;
+	mode->hsync_end = RK_DRM_MODE_HSYNC_END;
+	mode->htotal = RK_DRM_MODE_HTOTAL;
+	mode->vdisplay = RK_DRM_MODE_HEIGHT;
+	mode->vsync_start = RK_DRM_MODE_VSYNC_START;
+	mode->vsync_end = RK_DRM_MODE_VSYNC_END;
+	mode->vtotal = RK_DRM_MODE_VTOTAL;
+	mode->flags = DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
+	drm_mode_set_name(mode);
+	drm_mode_probed_add(connector, mode);
+
+	return (1);
+}
+
+static int
+rk_drm_connector_mode_valid(struct drm_connector *connector,
+    struct drm_display_mode *mode)
+{
+	if (mode->hdisplay != RK_DRM_MODE_WIDTH ||
+	    mode->vdisplay != RK_DRM_MODE_HEIGHT)
+		return (MODE_BAD);
+
+	return (MODE_OK);
+}
+
+static struct drm_encoder *
+rk_drm_connector_best_encoder(struct drm_connector *connector)
+{
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(connector->dev->dev);
+	return (&sc->encoder);
+}
+
+static const struct drm_connector_helper_funcs rk_drm_connector_helper_funcs = {
+	.get_modes = rk_drm_connector_get_modes,
+	.mode_valid = rk_drm_connector_mode_valid,
+	.best_encoder = rk_drm_connector_best_encoder,
+};
+
+static int
+rk_drm_kms_init(struct rk_drm_softc *sc)
+{
+	struct drm_device *drm_dev;
+	int error;
+
+	drm_dev = &sc->drm_dev;
+
+	drm_mode_config_init(drm_dev);
+	drm_dev->mode_config.min_width = RK_DRM_MODE_WIDTH;
+	drm_dev->mode_config.min_height = RK_DRM_MODE_HEIGHT;
+	drm_dev->mode_config.max_width = RK_DRM_MODE_WIDTH;
+	drm_dev->mode_config.max_height = RK_DRM_MODE_HEIGHT;
+	drm_dev->mode_config.funcs = &rk_drm_mode_config_funcs;
+
+	error = drm_crtc_init(drm_dev, &sc->crtc, &rk_drm_crtc_funcs);
+	if (error != 0)
+		goto fail;
+	drm_crtc_helper_add(&sc->crtc, &rk_drm_crtc_helper_funcs);
+
+	error = drm_encoder_init(drm_dev, &sc->encoder, &rk_drm_encoder_funcs,
+	    DRM_MODE_ENCODER_TMDS);
+	if (error != 0)
+		goto fail;
+	drm_encoder_helper_add(&sc->encoder, &rk_drm_encoder_helper_funcs);
+	sc->encoder.possible_crtcs = 0x1;
+
+	error = drm_connector_init(drm_dev, &sc->connector,
+	    &rk_drm_connector_funcs, DRM_MODE_CONNECTOR_HDMIA);
+	if (error != 0)
+		goto fail;
+	drm_connector_helper_add(&sc->connector,
+	    &rk_drm_connector_helper_funcs);
+	sc->connector.interlace_allowed = false;
+	sc->connector.doublescan_allowed = false;
+	sc->connector.polled = DRM_CONNECTOR_POLL_CONNECT |
+	    DRM_CONNECTOR_POLL_DISCONNECT;
+	drm_mode_connector_attach_encoder(&sc->connector, &sc->encoder);
+
+	drm_mode_config_reset(drm_dev);
+
+	return (0);
+
+fail:
+	drm_mode_config_cleanup(drm_dev);
+	return (error);
+}
+
+static void
+rk_drm_kms_fini(struct rk_drm_softc *sc)
+{
+	drm_mode_config_cleanup(&sc->drm_dev);
+}
+
+static int
+rk_drm_drm_load(struct drm_device *drm_dev, unsigned long flags)
+{
+	struct rk_drm_softc *sc;
+	int error;
+
+	sc = device_get_softc(drm_dev->dev);
+	error = rk_drm_kms_init(sc);
+	if (error != 0)
+		return (error);
+
+	error = rk_drm_fbdev_init(sc);
+	if (error != 0) {
+		rk_drm_kms_fini(sc);
+		return (error);
+	}
+
+	drm_kms_helper_poll_init(drm_dev);
+	return (0);
+}
+
+static int
+rk_drm_drm_unload(struct drm_device *drm_dev)
+{
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(drm_dev->dev);
+	drm_kms_helper_poll_fini(drm_dev);
+	rk_drm_fbdev_destroy(sc);
+	rk_drm_kms_fini(sc);
+	return (0);
+}
+
+static struct drm_ioctl_desc rk_drm_ioctls[] = {
+};
+
+static struct drm_driver rk_drm_driver = {
+	.driver_features = DRIVER_MODESET | DRIVER_GEM,
+	.load = rk_drm_drm_load,
+	.unload = rk_drm_drm_unload,
+	.gem_free_object = rk_drm_bo_free_object,
+	.gem_pager_ops = &rk_drm_gem_pager_ops,
+	.dumb_create = rk_drm_bo_dumb_create,
+	.dumb_map_offset = rk_drm_bo_dumb_map_offset,
+	.dumb_destroy = rk_drm_bo_dumb_destroy,
+	.ioctls = rk_drm_ioctls,
+	.num_ioctls = nitems(rk_drm_ioctls),
+	.name = RK_DRM_DRIVER_NAME,
+	.desc = RK_DRM_DRIVER_DESC,
+	.date = RK_DRM_DRIVER_DATE,
+	.major = RK_DRM_DRIVER_MAJOR,
+	.minor = RK_DRM_DRIVER_MINOR,
+	.patchlevel = RK_DRM_DRIVER_PATCHLEVEL,
+};
+
+static int
+rk_drm_probe(device_t dev)
+{
+	if (!ofw_bus_status_okay(dev))
+		return (ENXIO);
+	if (ofw_bus_search_compatible(dev, rk_drm_compat_data)->ocd_data == 0)
+		return (ENXIO);
+
+	device_set_desc(dev, RK_DRM_DRIVER_DESC);
+	return (BUS_PROBE_DEFAULT);
+}
+
+static int
+rk_drm_attach(device_t dev)
+{
+	struct rk_drm_softc *sc;
+	int error;
+
+	sc = device_get_softc(dev);
+	bzero(sc, sizeof(*sc));
+	sc->dev = dev;
+
+	error = rk_drm_hw_attach(sc);
+	if (error != 0) {
+		device_printf(dev, "hardware attach failed: %d\n", error);
+		return (error);
+	}
+
+	bzero(&sc->drm_dev, sizeof(sc->drm_dev));
+	sc->drm_dev.dev = dev;
+	sc->drm_dev.dev_private = sc;
+
+	error = drm_get_platform_dev(dev, &sc->drm_dev, &rk_drm_driver);
+	if (error != 0) {
+		device_printf(dev, "drm_get_platform_dev failed: %d\n", error);
+		rk_drm_hw_detach(sc);
+		return (error);
+	}
+
+	sc->drm_registered = true;
+	device_printf(dev, "registered fixed-mode DRM device (%dx%d)\n",
+	    RK_DRM_MODE_WIDTH, RK_DRM_MODE_HEIGHT);
+
+	return (0);
+}
+
+static int
+rk_drm_detach(device_t dev)
+{
+	struct rk_drm_softc *sc;
+
+	sc = device_get_softc(dev);
+	if (sc->drm_registered) {
+		drm_put_dev(&sc->drm_dev);
+		sc->drm_registered = false;
+	}
+	rk_drm_hw_detach(sc);
+	return (0);
+}
+
+static device_method_t rk_drm_methods[] = {
+	DEVMETHOD(device_probe,		rk_drm_probe),
+	DEVMETHOD(device_attach,	rk_drm_attach),
+	DEVMETHOD(device_detach,	rk_drm_detach),
+	DEVMETHOD(fb_getinfo,		rk_drm_fb_helper_getinfo),
+	DEVMETHOD_END
+};
+
+static driver_t rk_drm_driver_kobj = {
+	RK_DRM_DRIVER_NAME,
+	rk_drm_methods,
+	sizeof(struct rk_drm_softc),
+};
+
+DRIVER_MODULE(rk_drm, simplebus, rk_drm_driver_kobj, 0, 0);
+DRIVER_MODULE(rk_drm, ofwbus, rk_drm_driver_kobj, 0, 0);
+extern driver_t fbd_driver;
+DRIVER_MODULE(fbd, rk_drm, fbd_driver, 0, 0);
+MODULE_VERSION(rk_drm, 1);

@@ -1,0 +1,56 @@
+diff --git a/sys/conf/files b/sys/conf/files
+index 8c9993d8f..1798802d5 100644
+--- a/sys/conf/files
++++ b/sys/conf/files
+@@ -1559,7 +1559,7 @@ dev/dcons/dcons_os.c		optional dcons
+ dev/dialog/da9063/da9063_if.m	optional da9063_pmic
+ dev/dialog/da9063/da9063_iic.c	optional da9063_pmic iicbus fdt
+ dev/dialog/da9063/da9063_rtc.c	optional da9063_rtc fdt
+-dev/drm2/drm_agpsupport.c	optional drm2
++dev/drm2/drm_agpsupport.c	optional drm2 agp
+ dev/drm2/drm_auth.c		optional drm2
+ dev/drm2/drm_bufs.c		optional drm2
+ dev/drm2/drm_buffer.c		optional drm2
+@@ -1578,6 +1578,7 @@ dev/drm2/drm_gem_names.c	optional drm2
+ dev/drm2/drm_global.c		optional drm2
+ dev/drm2/drm_hashtab.c		optional drm2
+ dev/drm2/drm_ioctl.c		optional drm2
++dev/drm2/drm_ioc32.c		optional drm2 compat_freebsd32
+ dev/drm2/drm_irq.c		optional drm2
+ dev/drm2/drm_linux_list_sort.c	optional drm2
+ dev/drm2/drm_lock.c		optional drm2
+@@ -1591,7 +1592,7 @@ dev/drm2/drm_stub.c		optional drm2
+ dev/drm2/drm_sysctl.c		optional drm2
+ dev/drm2/drm_vm.c		optional drm2
+ dev/drm2/drm_os_freebsd.c	optional drm2
+-dev/drm2/ttm/ttm_agp_backend.c	optional drm2
++dev/drm2/ttm/ttm_agp_backend.c	optional drm2 agp
+ dev/drm2/ttm/ttm_lock.c		optional drm2
+ dev/drm2/ttm/ttm_object.c	optional drm2
+ dev/drm2/ttm/ttm_tt.c		optional drm2
+diff --git a/sys/dev/drm2/drm_os_freebsd.h b/sys/dev/drm2/drm_os_freebsd.h
+index ec1042f8f..0ca4a109c 100644
+--- a/sys/dev/drm2/drm_os_freebsd.h
++++ b/sys/dev/drm2/drm_os_freebsd.h
+@@ -576,7 +576,7 @@ typedef struct drm_pci_id_list
+ #define	CONFIG_COMPAT
+ #endif
+ 
+-#ifndef __arm__
++#if defined(__i386__) || defined(__amd64__) || defined(__ia64__)
+ #define	CONFIG_AGP	1
+ #define	CONFIG_MTRR	1
+ #endif
+diff --git a/sys/dev/drm2/ttm/ttm_bo_util.c b/sys/dev/drm2/ttm/ttm_bo_util.c
+index 3948075ad..d3a22e1fa 100644
+--- a/sys/dev/drm2/ttm/ttm_bo_util.c
++++ b/sys/dev/drm2/ttm/ttm_bo_util.c
+@@ -438,7 +438,7 @@ vm_memattr_t
+ ttm_io_prot(uint32_t caching_flags)
+ {
+ #if defined(__i386__) || defined(__amd64__) || defined(__powerpc__) || 	\
+- defined(__arm__)
++ defined(__arm__) || defined(__aarch64__)
+ 	if (caching_flags & TTM_PL_FLAG_WC)
+ 		return (VM_MEMATTR_WRITE_COMBINING);
+ 	else
