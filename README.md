@@ -39,6 +39,8 @@ Current milestone from the local FreeBSD tree:
 - Xorg now exposes multiple EDID-backed modes on `HDMI-1`
 - a live runtime switch to `1024x768` and back to `1920x1080` has been
   verified under X
+- additional live runtime switches to `800x600` and `1600x900` have also been
+  verified under X
 
 Current bounded-mode policy:
 
@@ -47,16 +49,26 @@ Current bounded-mode policy:
   `1920x1080` whose pixel clocks match the currently implemented RK3399 VPLL
   table
 - the initial supported clocks are:
+  - `25.200 MHz`
   - `27.000 MHz`
+  - `40.000 MHz`
   - `54.000 MHz`
   - `65.000 MHz`
   - `74.250 MHz`
+  - `81.600 MHz`
   - `96.000 MHz`
-- `106.500 MHz`
-- `148.500 MHz`
-- on the current `W156F1` monitor, the verified runtime EDID modes include:
-  - `1920x1080`
+  - `106.500 MHz`
+  - `108.000 MHz`
+  - `119.000 MHz`
+  - `148.500 MHz`
+- on the current `W156F1` monitor, the verified exposed EDID modes are:
+  - `640x480`
+  - `800x600`
   - `1024x768`
+  - `1152x864`
+  - `1280x1024`
+  - `1600x900`
+  - `1920x1080`
 
 Still missing:
 

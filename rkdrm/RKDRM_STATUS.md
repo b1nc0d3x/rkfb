@@ -42,6 +42,15 @@ The next direct proof is now also in place:
 - `xrandr` reported multiple EDID-backed modes on `HDMI-1`
 - a live switch to `1024x768` succeeded
 - a live switch back to `1920x1080` succeeded
+- after widening the bounded PLL set, `xrandr` now reports:
+  - `640x480`
+  - `800x600`
+  - `1024x768`
+  - `1152x864`
+  - `1280x1024`
+  - `1600x900`
+  - `1920x1080`
+- additional live switches to `800x600` and `1600x900` both succeeded
 
 ## EDID And Modeset Status
 
@@ -59,13 +68,22 @@ Current limitation:
   currently implemented RK3399 VPLL table and whose dimensions fit within the
   bounded `1920x1080` scanout policy
 - the current supported clocks are:
+  - `25.200 MHz`
   - `27.000 MHz`
+  - `40.000 MHz`
   - `54.000 MHz`
   - `65.000 MHz`
   - `74.250 MHz`
+  - `81.600 MHz`
   - `96.000 MHz`
   - `106.500 MHz`
+  - `108.000 MHz`
+  - `119.000 MHz`
   - `148.500 MHz`
+- standard DMT clocks that are slightly off those integer-mode values are
+  accepted through a narrow `250 kHz` tolerance window, which is what lets:
+  - `25.175 MHz` map to `25.200 MHz`
+  - `81.62 MHz` map to `81.600 MHz`
 - interlaced and doublescan modes are still rejected
 - the driver still boots in the known-good `1920x1080` mode before KMS picks a
   runtime mode
@@ -83,7 +101,10 @@ The new mode path has now passed all of the following on the RockPro64 board:
 - DRM attach and `/dev/dri/card0` creation on the new kernel
 - Xorg `modesetting` startup on the new kernel
 - EDID-backed mode exposure through `xrandr`
-- actual runtime switch to a non-`1080p` mode (`1024x768`)
+- actual runtime switches to non-`1080p` modes:
+  - `1024x768`
+  - `800x600`
+  - `1600x900`
 
 That moves this branch from "enumerates modes" to "performs real bounded
 dynamic modeset on hardware."

@@ -230,13 +230,26 @@ struct rk_drm_phy_config {
 	uint16_t	vlev;
 };
 
+/*
+ * RK3399 can synthesize more clocks than the initial bring-up set. Keep the
+ * table explicit and use a small tolerance so standard DMT clocks like
+ * 25.175 MHz and 81.62 MHz can map to nearby integer-mode VPLL settings
+ * without opening the door to arbitrary clocks.
+ */
+#define RK_DRM_PLL_TOLERANCE_KHZ 250
+
 static const struct rk_drm_pll_rate rk_drm_pll_rates[] = {
+	{  25200, 5, 21, 4, 1 },
 	{  27000, 1, 27, 6, 4 },
+	{  40000, 3, 20, 4, 1 },
 	{  54000, 1, 54, 6, 4 },
 	{  65000, 1, 65, 6, 4 },
 	{  74250, 2, 99, 4, 4 },
+	{  81600, 5, 68, 4, 1 },
 	{  96000, 1, 64, 4, 4 },
 	{ 106500, 1, 71, 4, 4 },
+	{ 108000, 3, 54, 4, 1 },
+	{ 119000, 6, 119, 4, 1 },
 	{ 148500, 4, 99, 4, 1 },
 };
 
@@ -371,11 +384,27 @@ static const struct rk_drm_pll_rate *
 rk_drm_find_pll_rate(uint32_t clock_khz)
 {
 	size_t i;
+	const struct rk_drm_pll_rate *best;
+	uint32_t best_delta;
 
+	best = NULL;
+	best_delta = UINT32_MAX;
 	for (i = 0; i < nitems(rk_drm_pll_rates); i++) {
-		if (rk_drm_pll_rates[i].clock_khz == clock_khz)
-			return (&rk_drm_pll_rates[i]);
+		uint32_t table_clock;
+		uint32_t delta;
+
+		table_clock = rk_drm_pll_rates[i].clock_khz;
+		delta = (table_clock > clock_khz) ?
+		    (table_clock - clock_khz) : (clock_khz - table_clock);
+		if (delta < best_delta) {
+			best = &rk_drm_pll_rates[i];
+			best_delta = delta;
+			if (delta == 0)
+				break;
+		}
 	}
+	if (best != NULL && best_delta <= RK_DRM_PLL_TOLERANCE_KHZ)
+		return (best);
 	return (NULL);
 }
 
