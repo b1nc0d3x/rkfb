@@ -46,7 +46,9 @@
 #include <dev/drm2/drmP.h>
 #include <dev/drm2/drm_crtc.h>
 #include <dev/drm2/drm_crtc_helper.h>
+#include <dev/drm2/drm_edid.h>
 #include <dev/drm2/drm_fb_helper.h>
+#include <dev/ofw/openfirm.h>
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
@@ -81,6 +83,7 @@ struct rk_drm_fb {
 static void rk_drm_fbdev_destroy(struct rk_drm_softc *sc);
 static int rk_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
     struct drm_framebuffer *old_fb);
+static int rk_drm_connector_add_fixed_mode(struct drm_connector *connector);
 
 static void
 rk_drm_output_poll_changed(struct drm_device *drm_dev)
@@ -891,7 +894,7 @@ static const struct drm_connector_funcs rk_drm_connector_funcs = {
 };
 
 static int
-rk_drm_connector_get_modes(struct drm_connector *connector)
+rk_drm_connector_add_fixed_mode(struct drm_connector *connector)
 {
 	struct drm_device *drm_dev;
 	struct drm_display_mode *mode;
@@ -919,9 +922,45 @@ rk_drm_connector_get_modes(struct drm_connector *connector)
 }
 
 static int
+rk_drm_connector_get_modes(struct drm_connector *connector)
+{
+	struct edid *edid;
+	device_t ddc_dev;
+	phandle_t node;
+	pcell_t xref;
+	int count;
+
+	edid = NULL;
+	ddc_dev = NULL;
+	node = OF_finddevice("/hdmi@ff940000");
+	if (node != -1) {
+		if (OF_getencprop(node, "ddc-i2c-bus", &xref, sizeof(xref)) != -1)
+			ddc_dev = OF_device_from_xref(xref);
+		else if (OF_getencprop(node, "ddc", &xref, sizeof(xref)) != -1)
+			ddc_dev = OF_device_from_xref(xref);
+	}
+
+	if (ddc_dev != NULL)
+		edid = drm_get_edid(connector, ddc_dev);
+
+	if (edid != NULL) {
+		drm_mode_connector_update_edid_property(connector, edid);
+		count = drm_add_edid_modes(connector, edid);
+		drm_edid_to_eld(connector, edid);
+		if (count > 0)
+			return (count);
+	}
+
+	drm_mode_connector_update_edid_property(connector, NULL);
+	return (rk_drm_connector_add_fixed_mode(connector));
+}
+
+static int
 rk_drm_connector_mode_valid(struct drm_connector *connector,
     struct drm_display_mode *mode)
 {
+	(void)connector;
+
 	if (mode->hdisplay != RK_DRM_MODE_WIDTH ||
 	    mode->vdisplay != RK_DRM_MODE_HEIGHT)
 		return (MODE_BAD);

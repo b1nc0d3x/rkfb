@@ -31,6 +31,7 @@ Current milestone from the local FreeBSD tree:
 - `rk_drm0` probes on `ofwbus0`
 - `/dev/dri/card0` and `/dev/dri/controlD64` exist
 - fixed `1920x1080` scanout is active
+- HDMI EDID is read through native FreeBSD DDC / `iicbus`
 - dumb buffers work
 - Xorg `modesetting` gets past the old
   `KMS doesn't support dumb interface` failure
