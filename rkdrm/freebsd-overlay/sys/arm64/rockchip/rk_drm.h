@@ -8,6 +8,7 @@
 #ifndef _ARM64_ROCKCHIP_RK_DRM_H_
 #define _ARM64_ROCKCHIP_RK_DRM_H_
 
+#include <sys/mutex.h>
 #include <sys/taskqueue.h>
 
 #define RK_DRM_DRIVER_NAME        "rk_drm"
@@ -49,13 +50,20 @@ struct rk_drm_softc {
 	struct drm_encoder	encoder;
 	struct drm_connector	connector;
 	struct rk_drm_fbdev	*fbdev;
+	struct mtx		hw_lock;
 	bool			drm_registered;
 	bool			hw_attached;
 	bool			output_enabled;
 	bool			hpd_task_running;
+	bool			vblank_task_running;
 	bool			hpd_state_valid;
 	bool			hpd_last_status;
 	bool			hpd_squelch;
+	bool			pending_flip_put;
+	int			vblank_ticks;
+	struct drm_framebuffer	*pending_fb;
+	struct drm_pending_vblank_event *pending_flip_event;
+	struct timeout_task	vblank_task;
 	struct timeout_task	hpd_task;
 
 	bus_dma_tag_t		fb_dma_tag;

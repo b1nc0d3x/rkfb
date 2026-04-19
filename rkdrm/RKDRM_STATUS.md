@@ -19,6 +19,16 @@ milestones on RockPro64 / RK3399:
   - HDMI PHY parameter selection
 - native HPD polling is implemented through a driver-local timeout task plus
   `drm_helper_hpd_irq_event()`
+- a physical HDMI unplug/replug validation pass succeeded on the RockPro64
+- software vblank and single-CRTC page flips are implemented through a
+  driver-local timeout task plus FreeBSD `drm2` vblank helpers:
+  - `drm_vblank_init()`
+  - `drm_handle_vblank()`
+  - `drm_send_vblank_event()`
+- the driver now serializes VOP/HDMI access and HPD/vblank task state through
+  a dedicated mutex, so HPD polling, KMS blank/unblank, and page-flip scanout
+  changes do not race each other
+- `lastclose` now restores fbdev/vt mode through `drm_fb_helper_restore_fbdev_mode()`
 - connector DPMS and CRTC prepare/commit/disable hooks now drive real hardware
   blank/unblank instead of remaining no-ops
 - `fbd` / `vt` can attach through the DRM path
@@ -55,6 +65,19 @@ The next direct proof is now also in place:
   - `1600x900`
   - `1920x1080`
 - additional live switches to `800x600` and `1600x900` both succeeded
+- after adding page-flip / vblank support, the rebuilt `RP64KERN_RKDRM`
+  kernel still:
+  - boots cleanly
+  - creates `/dev/dri/card0`
+  - auto-starts `slim` and Xorg
+  - exposes the Present extension in Xorg without regressing EDID mode bring-up
+- after the driver-hardening pass, the next rebuilt `RP64KERN_RKDRM` kernel
+  also still:
+  - boots cleanly as kernel `#14`
+  - attaches `rk_drm0`
+  - creates `/dev/dri/card0` and `/dev/fb0`
+  - auto-starts `slim` and Xorg
+  - keeps EDID-backed `HDMI-1` modes working on the DRM path
 
 ## EDID And Modeset Status
 
@@ -120,9 +143,8 @@ This branch is not a complete desktop-grade DRM stack yet.
 
 Missing or incomplete pieces still include:
 
-- a physical unplug/replug validation pass for the new HPD path
 - hardware-accelerated rendering
-- broader KMS cleanup around page flips / vblank / polish
+- deeper long-run stress-testing around repeated flips / modesets
 
 ## Relationship To rkfb
 

@@ -50,6 +50,13 @@ Current bounded-mode policy:
   table
 - native HPD polling is now wired through a driver-local timeout task and
   `drm_helper_hpd_irq_event()`
+- software vblank is now wired through a driver-local timeout task, with
+  `drm_vblank_init()` / `drm_handle_vblank()` / `drm_send_vblank_event()`
+  backing single-CRTC page flips
+- hardware/task state is now serialized through a dedicated driver mutex so
+  HPD polling, software vblank, page flips, and KMS blank/unblank paths do
+  not race each other on the same VOP/HDMI state
+- `lastclose` now restores fbdev/vt mode cleanly after DRM clients exit
 - CRTC prepare/commit/disable/DPMS hooks now perform real hardware blanking
   and re-enable instead of staying stubbed out
 - the initial supported clocks are:
@@ -77,8 +84,7 @@ Current bounded-mode policy:
 Still missing:
 
 - hardware acceleration
-- broader KMS polish like page flips / vblank work
-- a physical unplug/replug validation pass for the new HPD path
+- deeper long-run stress-testing around repeated flips/modesets
 
 ## Intended Use
 
