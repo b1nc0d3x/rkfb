@@ -4,23 +4,22 @@
  * Copyright (c) 2026 Kyle T. Crenshaw
  * All rights reserved.
  *
- * Phase-2 DRM/KMS fixed-mode bring-up for RK3399 on FreeBSD's drm2 stack.
+ * Phase-2 DRM/KMS bounded-dynamic bring-up for RK3399 on FreeBSD's drm2 stack.
  *
  * This phase is still intentionally narrow:
- * - one fixed HDMI-A connector
+ * - one HDMI-A connector
  * - one TMDS encoder
  * - one CRTC
- * - one fixed 1920x1080p60 mode
+ * - EDID-backed mode discovery
+ * - runtime modes limited to the RK3399-safe clocks implemented in rk_drm_hw.c
  *
  * It is no longer just an object-model scaffold:
- * - fixed-mode hardware bring-up is now owned by rk_drm
+ * - hardware bring-up is now owned by rk_drm
  * - one internal scanout buffer is allocated and programmed into WIN0
  *
  * It is still not a full display driver:
- * - no GEM/dumb buffers yet
- * - no EDID-based mode list yet
  * - no hotplug policy beyond raw HPD
- * - fbdev/vt is currently a helper-backed bridge over the fixed scanout buffer
+ * - fbdev/vt is currently a helper-backed bridge over the boot scanout buffer
  *
  * The purpose of this stage is to move the Rockchip DRM bring-up into the
  * FreeBSD kernel tree so it can link against drm2 through the normal kernel
@@ -80,10 +79,27 @@ struct rk_drm_fb {
 	int			nplanes;
 };
 
+static int rk_drm_connector_add_fixed_mode(struct drm_connector *connector);
 static void rk_drm_fbdev_destroy(struct rk_drm_softc *sc);
 static int rk_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
     struct drm_framebuffer *old_fb);
-static int rk_drm_connector_add_fixed_mode(struct drm_connector *connector);
+
+static void
+rk_drm_mode_fill_default(struct drm_display_mode *mode)
+{
+	memset(mode, 0, sizeof(*mode));
+	mode->clock = RK_DRM_DEFAULT_CLOCK_KHZ;
+	mode->hdisplay = RK_DRM_DEFAULT_WIDTH;
+	mode->hsync_start = RK_DRM_DEFAULT_HSYNC_START;
+	mode->hsync_end = RK_DRM_DEFAULT_HSYNC_END;
+	mode->htotal = RK_DRM_DEFAULT_HTOTAL;
+	mode->vdisplay = RK_DRM_DEFAULT_HEIGHT;
+	mode->vsync_start = RK_DRM_DEFAULT_VSYNC_START;
+	mode->vsync_end = RK_DRM_DEFAULT_VSYNC_END;
+	mode->vtotal = RK_DRM_DEFAULT_VTOTAL;
+	mode->flags = DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
+	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
+}
 
 static void
 rk_drm_output_poll_changed(struct drm_device *drm_dev)
@@ -742,10 +758,12 @@ rk_drm_crtc_mode_set(struct drm_crtc *crtc, struct drm_display_mode *mode,
     struct drm_framebuffer *old_fb)
 {
 	struct rk_drm_softc *sc;
+	const struct drm_display_mode *active_mode;
 	int error;
 
 	sc = device_get_softc(crtc->dev->dev);
-	error = rk_drm_hw_modeset(sc);
+	active_mode = adjusted_mode != NULL ? adjusted_mode : mode;
+	error = rk_drm_hw_modeset(sc, active_mode);
 	if (error != 0)
 		return (-error);
 	if (crtc->fb == NULL)
@@ -904,17 +922,7 @@ rk_drm_connector_add_fixed_mode(struct drm_connector *connector)
 	if (mode == NULL)
 		return (0);
 
-	mode->clock = RK_DRM_MODE_CLOCK_KHZ;
-	mode->hdisplay = RK_DRM_MODE_WIDTH;
-	mode->hsync_start = RK_DRM_MODE_HSYNC_START;
-	mode->hsync_end = RK_DRM_MODE_HSYNC_END;
-	mode->htotal = RK_DRM_MODE_HTOTAL;
-	mode->vdisplay = RK_DRM_MODE_HEIGHT;
-	mode->vsync_start = RK_DRM_MODE_VSYNC_START;
-	mode->vsync_end = RK_DRM_MODE_VSYNC_END;
-	mode->vtotal = RK_DRM_MODE_VTOTAL;
-	mode->flags = DRM_MODE_FLAG_PHSYNC | DRM_MODE_FLAG_PVSYNC;
-	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
+	rk_drm_mode_fill_default(mode);
 	drm_mode_set_name(mode);
 	drm_mode_probed_add(connector, mode);
 
@@ -961,8 +969,7 @@ rk_drm_connector_mode_valid(struct drm_connector *connector,
 {
 	(void)connector;
 
-	if (mode->hdisplay != RK_DRM_MODE_WIDTH ||
-	    mode->vdisplay != RK_DRM_MODE_HEIGHT)
+	if (!rk_drm_hw_mode_valid(mode))
 		return (MODE_BAD);
 
 	return (MODE_OK);
@@ -992,10 +999,10 @@ rk_drm_kms_init(struct rk_drm_softc *sc)
 	drm_dev = &sc->drm_dev;
 
 	drm_mode_config_init(drm_dev);
-	drm_dev->mode_config.min_width = RK_DRM_MODE_WIDTH;
-	drm_dev->mode_config.min_height = RK_DRM_MODE_HEIGHT;
-	drm_dev->mode_config.max_width = RK_DRM_MODE_WIDTH;
-	drm_dev->mode_config.max_height = RK_DRM_MODE_HEIGHT;
+	drm_dev->mode_config.min_width = 640;
+	drm_dev->mode_config.min_height = 480;
+	drm_dev->mode_config.max_width = RK_DRM_MAX_WIDTH;
+	drm_dev->mode_config.max_height = RK_DRM_MAX_HEIGHT;
 	drm_dev->mode_config.funcs = &rk_drm_mode_config_funcs;
 
 	error = drm_crtc_init(drm_dev, &sc->crtc, &rk_drm_crtc_funcs);
@@ -1132,8 +1139,7 @@ rk_drm_attach(device_t dev)
 	}
 
 	sc->drm_registered = true;
-	device_printf(dev, "registered fixed-mode DRM device (%dx%d)\n",
-	    RK_DRM_MODE_WIDTH, RK_DRM_MODE_HEIGHT);
+	device_printf(dev, "registered DRM device with EDID-bounded modeset\n");
 
 	return (0);
 }

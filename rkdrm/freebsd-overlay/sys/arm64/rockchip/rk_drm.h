@@ -9,31 +9,35 @@
 #define _ARM64_ROCKCHIP_RK_DRM_H_
 
 #define RK_DRM_DRIVER_NAME        "rk_drm"
-#define RK_DRM_DRIVER_DESC        "RK3399 DRM/KMS fixed-mode bring-up"
+#define RK_DRM_DRIVER_DESC        "RK3399 DRM/KMS EDID-bounded modeset"
 #define RK_DRM_DRIVER_DATE        "20260419"
 #define RK_DRM_DRIVER_MAJOR       0
-#define RK_DRM_DRIVER_MINOR       2
+#define RK_DRM_DRIVER_MINOR       3
 #define RK_DRM_DRIVER_PATCHLEVEL  0
 
 /*
- * Phase 2 is still intentionally fixed-mode. These timings match the working
- * 1080p60 rkfb baseline and give the DRM object model a concrete mode
- * to advertise before EDID and hotplug are implemented.
+ * The initial hardware bring-up still boots in the known-good 1080p60 mode,
+ * but runtime modeset is now driven from EDID for the subset of modes whose
+ * clocks and HDMI PHY settings are implemented in rk_drm_hw.c.
  */
-#define RK_DRM_MODE_CLOCK_KHZ     148500
-#define RK_DRM_MODE_WIDTH         1920
-#define RK_DRM_MODE_HEIGHT        1080
-#define RK_DRM_MODE_HSYNC_START   2008
-#define RK_DRM_MODE_HSYNC_END     2052
-#define RK_DRM_MODE_HTOTAL        2200
-#define RK_DRM_MODE_VSYNC_START   1084
-#define RK_DRM_MODE_VSYNC_END     1089
-#define RK_DRM_MODE_VTOTAL        1125
+#define RK_DRM_DEFAULT_CLOCK_KHZ     148500
+#define RK_DRM_DEFAULT_WIDTH         1920
+#define RK_DRM_DEFAULT_HEIGHT        1080
+#define RK_DRM_DEFAULT_HSYNC_START   2008
+#define RK_DRM_DEFAULT_HSYNC_END     2052
+#define RK_DRM_DEFAULT_HTOTAL        2200
+#define RK_DRM_DEFAULT_VSYNC_START   1084
+#define RK_DRM_DEFAULT_VSYNC_END     1089
+#define RK_DRM_DEFAULT_VTOTAL        1125
+
+#define RK_DRM_MAX_WIDTH             1920
+#define RK_DRM_MAX_HEIGHT            1080
 
 #define RK_DRM_BPP                32
 #define RK_DRM_FB_BOOT_COLOR      0xff202040u
 #define RK_DRM_FB_DMA_LOWADDR_TEST 0x0fffffffu
 
+struct drm_display_mode;
 struct rk_drm_fbdev;
 
 struct rk_drm_softc {
@@ -80,7 +84,9 @@ struct rk_drm_softc {
 
 int	rk_drm_hw_attach(struct rk_drm_softc *sc);
 void	rk_drm_hw_detach(struct rk_drm_softc *sc);
-int	rk_drm_hw_modeset(struct rk_drm_softc *sc);
+bool	rk_drm_hw_mode_valid(const struct drm_display_mode *mode);
+int	rk_drm_hw_modeset(struct rk_drm_softc *sc,
+	    const struct drm_display_mode *mode);
 int	rk_drm_hw_set_scanout(struct rk_drm_softc *sc, vm_paddr_t paddr,
 	    uint32_t stride);
 bool	rk_drm_hw_hpd(struct rk_drm_softc *sc);

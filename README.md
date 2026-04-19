@@ -30,16 +30,36 @@ Current milestone from the local FreeBSD tree:
 - `RP64KERN_RKDRM` boots successfully
 - `rk_drm0` probes on `ofwbus0`
 - `/dev/dri/card0` and `/dev/dri/controlD64` exist
-- fixed `1920x1080` scanout is active
 - HDMI EDID is read through native FreeBSD DDC / `iicbus`
+- runtime modeset is now EDID-driven for the bounded RK3399-safe clock set
+  implemented in `rk_drm_hw.c`
 - dumb buffers work
 - Xorg `modesetting` gets past the old
   `KMS doesn't support dumb interface` failure
+- Xorg now exposes multiple EDID-backed modes on `HDMI-1`
+- a live runtime switch to `1024x768` and back to `1920x1080` has been
+  verified under X
+
+Current bounded-mode policy:
+
+- the driver still boots in the known-good `1920x1080` mode
+- runtime KMS mode selection is accepted only for progressive modes within
+  `1920x1080` whose pixel clocks match the currently implemented RK3399 VPLL
+  table
+- the initial supported clocks are:
+  - `27.000 MHz`
+  - `54.000 MHz`
+  - `65.000 MHz`
+  - `74.250 MHz`
+  - `96.000 MHz`
+- `106.500 MHz`
+- `148.500 MHz`
+- on the current `W156F1` monitor, the verified runtime EDID modes include:
+  - `1920x1080`
+  - `1024x768`
 
 Still missing:
 
-- dynamic mode enumeration
-- EDID-driven mode selection
 - hotplug policy
 - hardware acceleration
 - broader KMS polish like page flips / vblank work
