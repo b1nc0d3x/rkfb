@@ -20,6 +20,36 @@ This note separates:
 It is intentionally branch-specific. Linux-specific provenance from the older
 `rkfb` bring-up is not repeated here.
 
+## FreeBSD Policy Fit
+
+The local FreeBSD source tree does not impose a single-tree single-license
+rule. What it does show, in-tree, is:
+
+- `COPYRIGHT`: the project compilation itself is distributed under a BSD-style
+  license
+- `README.md`: additional copyright and license terms may exist in specific
+  subdirectories, and GPL/LGPL/CDDL material is explicitly segregated into
+  places like `gnu/`, `cddl/`, and `contrib/`
+- `CONTRIBUTING.md`: contributors are expected to have rights to contribute
+  under the current license of the file being changed
+
+The practical reading for new native FreeBSD kernel code is therefore:
+
+- the low-friction path is permissive licensing
+- imported copyleft code may exist in the tree, but it is usually carried as
+  clearly identified upstream/imported material
+- new platform driver work should keep licensing and provenance simple unless
+  there is a compelling reason not to
+
+`rk_drm` is intentionally aligned with that path:
+
+- the driver files in this branch are `BSD-2-Clause`
+- the implementation basis is RP64-DOCS, FreeBSD code, NetBSD code, and local
+  RockPro64 bring-up work
+- no GPL/LGPL/CDDL implementation text is intentionally carried in this branch
+- if future work wants to import nontrivial third-party code, that code's
+  license and attribution should be recorded explicitly before it lands here
+
 ## Primary Hardware Documentation
 
 The primary authority for register meanings and field semantics was the vendor
