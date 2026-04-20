@@ -103,6 +103,35 @@ Open / Under Investigation
   probes.
 - Status: open.
 
+12. Eager rk_cdn_dp HPD/AUX probing in attach caused an arm64 external abort.
+- Area: sys/arm64/rockchip/rk_cdn_dp.c
+- Symptom: the board panicked at boot with:
+  - `panic: Unhandled external data abort`
+  - `far: 0xffff0000a7700608`
+  - backtrace through `phy_set_mode+0xb0`
+- Cause: the local scaffold was extended to touch DP controller MMIO for
+  `SYS_CTL_3` HPD state and early AUX/DPCD probing directly from `attach()`.
+- Effect: the board became unbootable until the Type-C DP force tunable was
+  overridden from the loader.
+- Status: fixed locally by deferring the risky MMIO/AUX probe path behind
+  `hw.rk_cdn_dp_attach_debug_probe=1` instead of doing it automatically.
+
+13. USB attach path can stall after the rk3399_power/rk_cdn_dp integration
+    kernel.
+- Area: arm64 Rockchip boot/device attach path, observed during USB bus bring-up
+  on RP64KERN_RKDRM.
+- Symptom: after rebuilding with the native `rk3399_power` provider and the new
+  `rk_cdn_dp` power-domain consumer path, the board no longer hits the old
+  `phy_set_mode()` external-abort panic, but the boot can stop during USB
+  attach. The last serial output from the affected boot was:
+  - `usbus0: 480Mbps High Speed USB v2.0`
+  - `usbus1: 12Mbps Full Sp`
+- Effect: the kernel gets further than the earlier DP abort, but networking and
+  late userland do not come up, so the board is not remotely reachable.
+- Current status: open. The regression is recorded; root cause is not proven
+  yet. The freeze may be in generic USB attach ordering, a Rockchip Type-C/PHY
+  interaction, or another side effect of the new DP integration path.
+
 Notes
 -----
 - Items 1 through 4 are generic FreeBSD drm2/arm64 integration bugs that had
