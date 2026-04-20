@@ -1,0 +1,19 @@
+# Local build and editor junk
+*.o
+*.ko
+*.core
+*.d
+*.depend
+*.swp
+*~
+.#*
+\#*#
+obj/
+
+# Local tool outputs
+rkdrm/tools/drm_dumb_probe
+
+# Common FreeBSD build leftovers
+export_syms
+machine
+opt_global.h
