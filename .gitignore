@@ -19,9 +19,14 @@ obj/
 # Temp files
 *~
 *.swp
+.#*
+\#*#
 
 export_syms
 machine
 opt_global.h
 
 rkfb-o*
+
+# Keep DRM/KMS work out of the minimal rkfb branch
+rkdrm/
