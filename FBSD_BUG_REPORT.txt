@@ -1,0 +1,114 @@
+FBSD_BUG_REPORT
+================
+
+Scope
+- This log tracks bugs or infrastructure gaps derived from FreeBSD itself,
+  FreeBSD's arm64/DRM integration, or the FreeBSD boot/runtime environment.
+- It does not list pure Rockchip hardware issues unless the failure was caused
+  by FreeBSD-side behavior.
+
+Fixed
+-----
+
+1. drm2 arm64 TTM memory-attribute path was unported.
+- Area: sys/dev/drm2/ttm/ttm_bo_util.c
+- Symptom: build stopped in ttm_io_prot() with a Port me blocker on arm64.
+- Effect: rk_drm could not even complete a kernel build on arm64.
+- Status: fixed locally in the FreeBSD tree used for RP64KERN_RKDRM.
+
+2. drm2 enabled legacy AGP on arm64.
+- Area: sys/dev/drm2/drm_os_freebsd.h plus sys/conf/files gating.
+- Symptom: final kernel link failed on AGP-only symbols on RK3399/arm64.
+- Effect: old desktop/x86 DRM baggage leaked into an SoC display build.
+- Status: fixed locally by keeping CONFIG_AGP off arm64 and gating AGP-only
+  DRM files on the agp option.
+
+3. drm2 compat/ioctl object list was incomplete for arm64 kernel builds.
+- Area: sys/conf/files
+- Symptom: unresolved drm_compat_ioctls during kernel link.
+- Effect: RK3399 DRM build reached final link and then failed in generic
+  FreeBSD drm2 infrastructure.
+- Status: fixed locally by adding drm_ioc32.c for drm2 compat_freebsd32.
+
+4. drm2 core object list omitted old core memory support needed by the build.
+- Area: sys/conf/files
+- Symptom: unresolved drm_core_ioremap and drm_core_ioremapfree.
+- Effect: generic drm2 core link failure unrelated to Rockchip hardware.
+- Status: fixed locally by restoring the needed drm2 core object coverage.
+
+5. FreeBSD native rk_typec_phy handling did not expose the DP-side child
+   endpoint needed for RK3399 Type-C DisplayPort work.
+- Area: FreeBSD arm64 Rockchip PHY handling
+- Symptom: the DP-side Type-C PHY path was not visible as a usable endpoint.
+- Effect: the Cadence DP controller could not be wired up cleanly to the
+  Type-C PHY path.
+- Status: fixed locally as part of the USB-C DP groundwork.
+
+6. FreeBSD had no native fusb302 driver in this path.
+- Area: sys/dev/iicbus/usb
+- Symptom: the RockPro64 Type-C controller was present in DT but only showed as
+  an unknown I2C child.
+- Effect: no native visibility into Type-C/alt-mode state on the board.
+- Status: fixed locally with a native FreeBSD fusb302 driver scaffold.
+
+7. rk_cdn_dp used the wrong FreeBSD IRQ RID.
+- Area: sys/arm64/rockchip/rk_cdn_dp.c
+- Symptom: dmesg showed the DP node as irq 17 on ofwbus0, but the driver still
+  reported irq=absent.
+- Cause: the driver requested SYS_RES_IRQ with RID 1 instead of RID 0.
+- Effect: FreeBSD-side resource acquisition bug in the local driver glue.
+- Status: fixed locally; pending reboot verification after the current build.
+
+Open / Under Investigation
+--------------------------
+
+8. EFI-supplied runtime FDT is overriding the expected /boot/dtb path on
+   RockPro64.
+- Area: arm64 boot/runtime DT handling under EFI on this board.
+- Symptom: boot log says "Using DTB provided by EFI", and the live OFW tree
+  does not fully match the edited device-tree sources or installed dtb files.
+- Effect: local DT source edits do not reliably become the runtime properties
+  seen by drivers.
+- Current observed mismatch:
+  - source DT contains extcon = <&fusb0> for &cdn_dp
+  - live OFW tree for /dp@fec00000 has no extcon property
+  - source DT intends USB owner changes for fe800000, but live status remains
+    okay
+- Status: open.
+
+9. Early RockPro64 FDT fixup path is not yet proving effective for the
+   USB-C DWC3 status override.
+- Area: arm64 early FDT mutation path
+- Symptom: debug kernels boot successfully, but the live OFW tree still shows
+  /usb@fe800000 and its child as okay, and no rk3399_fdt_fixup boot messages
+  appear in dmesg.
+- Effect: the intended handoff from USB3 owner to DP owner is not yet proven in
+  the live runtime tree.
+- Status: open.
+
+10. Live DP node still lacks extcon and related runtime Type-C policy data.
+- Area: runtime OFW/FDT contents seen by FreeBSD
+- Symptom: /dp@fec00000 has interrupts, but no extcon, no interrupt-names, and
+  no phy-names in the live tree.
+- Effect: DP-alt-mode policy remains incomplete even though rk_cdn_dp can now
+  probe and attach.
+- Status: open.
+
+11. FreeBSD still lacks a native Cadence DP implementation beyond controller
+    scaffold attach.
+- Area: sys/arm64/rockchip/rk_cdn_dp.c
+- Symptom: rk_cdn_dp attaches but still has no AUX, DPCD, link training, HPD
+  policy integration, or DRM connector plumbing.
+- Effect: USB-C DP video is not working yet even though the controller node now
+  probes.
+- Status: open.
+
+Notes
+-----
+- Items 1 through 4 are generic FreeBSD drm2/arm64 integration bugs that had
+  to be fixed before RK3399 DRM could even build and link cleanly.
+- Items 8 through 10 are platform/runtime integration issues rather than pure
+  Rockchip register programming problems.
+- This file is meant to stay factual: if a bug later proves to be caused by
+  board firmware or local driver code rather than FreeBSD itself, it should be
+  moved or rewritten accordingly.
