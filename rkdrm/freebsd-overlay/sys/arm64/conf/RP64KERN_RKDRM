@@ -17,7 +17,10 @@ include		"std.rockchip"
 # - drm2 core object model
 # - fbd bridge for framebuffer-style console integration
 # - rk_drm phase-1 Rockchip scaffold
+# - DP kept out for now while `rk3399_power` and `fusb302` are reintegrated
 #
 device		fbd
 device		drm2
 device		rk_drm
+device		rk3399_power
+device		fusb302
