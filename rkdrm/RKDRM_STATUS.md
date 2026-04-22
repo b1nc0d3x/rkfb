@@ -24,118 +24,53 @@ milestones on RockPro64 / RK3399:
   driver-local timeout task plus FreeBSD `drm2` vblank helpers:
   - `drm_vblank_init()`
   - `drm_handle_vblank()`
-  - `drm_send_vblank_event()`
-- the driver now serializes VOP/HDMI access and HPD/vblank task state through
-  a dedicated mutex, so HPD polling, KMS blank/unblank, and page-flip scanout
-  changes do not race each other
-- `lastclose` now restores fbdev/vt mode through `drm_fb_helper_restore_fbdev_mode()`
-- connector DPMS and CRTC prepare/commit/disable hooks now drive real hardware
-  blank/unblank instead of remaining no-ops
-- `fbd` / `vt` can attach through the DRM path
-- dumb-buffer capability is reported and working
-- Xorg `modesetting` can use the driver through `/dev/dri/card0`
-
-## Direct KMS Proof
-
-The userland dumb-buffer probe under `tools/drm_dumb_probe.c` verified:
-
-- `DRM_CAP_DUMB_BUFFER = 1`
-- `DRM_IOCTL_MODE_CREATE_DUMB` succeeds
-
-That was the concrete proof needed to get past the earlier Xorg failure:
-
-- old failure:
-  - `KMS doesn't support dumb interface`
-- current result:
-  - Xorg `modesetting` reaches the fixed HDMI output path
-
-The next direct proof is now also in place:
-
-- the board booted the rebuilt `RP64KERN_RKDRM` kernel
-- `slim` and Xorg started on that kernel
-- `xrandr` reported multiple EDID-backed modes on `HDMI-1`
-- a live switch to `1024x768` succeeded
-- a live switch back to `1920x1080` succeeded
-- after widening the bounded PLL set, `xrandr` now reports:
-  - `640x480`
-  - `800x600`
-  - `1024x768`
-  - `1152x864`
-  - `1280x1024`
-  - `1600x900`
-  - `1920x1080`
-- additional live switches to `800x600` and `1600x900` both succeeded
-- after adding page-flip / vblank support, the rebuilt `RP64KERN_RKDRM`
-  kernel still:
-  - boots cleanly
-  - creates `/dev/dri/card0`
-  - auto-starts `slim` and Xorg
-  - exposes the Present extension in Xorg without regressing EDID mode bring-up
-- after the driver-hardening pass, the next rebuilt `RP64KERN_RKDRM` kernel
-  also still:
-  - boots cleanly as kernel `#14`
-  - attaches `rk_drm0`
-  - creates `/dev/dri/card0` and `/dev/fb0`
-  - auto-starts `slim` and Xorg
-  - keeps EDID-backed `HDMI-1` modes working on the DRM path
-
-## EDID And Modeset Status
-
-The connector is no longer purely synthetic.
-
-It now:
-
-- looks up the HDMI DDC bus through the device tree
-- reads EDID through FreeBSD's native `device_t` DDC path
-- feeds EDID into DRM's standard property and mode parsing helpers
-
-Current limitation:
-
-- `mode_valid` now accepts only the subset of EDID modes whose clocks match the
-  currently implemented RK3399 VPLL table and whose dimensions fit within the
-  bounded `1920x1080` scanout policy
-- the current supported clocks are:
-  - `25.200 MHz`
-  - `27.000 MHz`
-  - `40.000 MHz`
-  - `54.000 MHz`
-  - `65.000 MHz`
-  - `74.250 MHz`
-  - `81.600 MHz`
-  - `96.000 MHz`
-  - `106.500 MHz`
-  - `108.000 MHz`
-  - `119.000 MHz`
-  - `148.500 MHz`
-- standard DMT clocks that are slightly off those integer-mode values are
-  accepted through a narrow `250 kHz` tolerance window, which is what lets:
-  - `25.175 MHz` map to `25.200 MHz`
-  - `81.62 MHz` map to `81.600 MHz`
-- interlaced and doublescan modes are still rejected
-- the driver still boots in the known-good `1920x1080` mode before KMS picks a
-  runtime mode
-
-That means EDID is now doing real work for both discovery and mode selection,
-but only inside the bounded hardware policy above.
-
-## Immediate Validation State
-
-The new mode path has now passed all of the following on the RockPro64 board:
-
-- in-tree `arm64` `rk_drm` module build
-- full `RP64KERN_RKDRM` kernel build
-- kernel install and reboot
-- DRM attach and `/dev/dri/card0` creation on the new kernel
-- Xorg `modesetting` startup on the new kernel
-- automatic `slim` / Xorg startup on the new kernel
-- EDID-backed mode exposure through `xrandr`
-- actual runtime switches to non-`1080p` modes:
-  - `1024x768`
-  - `800x600`
-  - `1600x900`
+  - `drm_crtc_send_vblank_event()`
+- framebuffer-backed scanout works through GEM CMA dumb buffers plus driver
+  buffer objects:
+  - `DUMB_GET_HARGS`
+  - `DUMB_GET_VARS`
+  - `DUMB_SET_VARS`
+  - `DUMB_PAN_DISPLAY`
+- the simple Xorg path works on top of the DRM node via the `modesetting`
+  driver, with real monitor EDID instead of a fixed fake mode list
+- bounded dynamic modeset was validated end-to-end through:
+  - kernel install and reboot
+  - DRM attach and `/dev/dri/card0` creation on the new kernel
+  - Xorg `modesetting` startup on the new kernel
+  - automatic `slim` / Xorg startup on the new kernel
+  - EDID-backed mode exposure through `xrandr`
+  - actual runtime switches to non-`1080p` modes:
+    - `1024x768`
+    - `800x600`
+    - `1600x900`
 
 That moves this branch from "enumerates modes" to "performs real bounded
 dynamic modeset on hardware."
+
+## 2026-04-21 DP Debug Checkpoint
+
+DisplayPort-related crash isolation is now far enough along that it has a
+stable recovery baseline and a reproducible panic path.
+
+What is verified:
+
+- a reduced `RP64KERN_RKDRM` kernel that excludes `rk_cdn_dp`,
+  `rk3399_power`, and `fusb302` boots reliably and is the current safe kernel
+- `DDB`, `KDB`, and persistent crash dumps to swap are configured on the board
+- `rk3399_power` loads and attaches successfully as a standalone runtime test
+- `fusb302` loads and attaches successfully as a standalone runtime test
+- a diagnostic modular `rk_cdn_dp` test copy reaches resource, clock, reset,
+  PHY, and scaffold attach milestones when its optional debug probe is deferred
+- enabling the debug/AUX probe path reproduces a real `panic: Unhandled System
+  Error` and drops the board into `ddb`
+
+The current working hypothesis is that the remaining fault is in the
+post-scaffold `rk_cdn_dp` bring-up path, likely around AUX / MMIO access or a
+closely related asynchronous hardware fault.
+
+See the detailed checkpoint note here:
+
+- `rkdrm/RKDRM_RK3399_DP_DEBUG_CHECKPOINT_2026-04-21.md`
 
 ## Still In Progress
 
@@ -145,6 +80,7 @@ Missing or incomplete pieces still include:
 
 - hardware-accelerated rendering
 - deeper long-run stress-testing around repeated flips / modesets
+- final root-cause isolation and reintegration of the RK3399 DisplayPort path
 
 ## Relationship To rkfb
 
