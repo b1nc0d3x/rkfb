@@ -204,6 +204,71 @@ Current implication:
   - `rk_cdn_dp`
   - DRM connector bring-up
 
+## 2026-04-22 `rp64dbg` Module-First `rk_cdn_dp` Result
+
+The recovered `rp64dbg` board is now the active safe place for module-first DP
+testing.  On this board the DT handoff is known-good and exposes the real
+Cadence DP node in the live tree:
+
+- `dp@fec00000 compat=rockchip,rk3399-cdn-dp`
+- `typec-portc@22 compat=fcs,fusb302`
+- `rk_typec_phy0`
+- `rk_typec_phy1`
+
+The original modular `rk_cdn_dp` blocker on `rp64dbg` was no longer DT
+discovery.  It was module linkage:
+
+- `rk3399_power_enable_domain` existed in `rk3399_power.ko` but was not
+  exported to consumers
+- `rk_cdn_dp.ko` also needed an explicit runtime dependency on
+  `rk3399_power`
+
+For the module-first path, the working setup became:
+
+- rebuild `rk3399_power.ko` with `EXPORT_SYMS=rk3399_power_enable_domain`
+- rebuild `rk_cdn_dp.ko` with:
+  - `DRIVER_MODULE(..., ofwbus, ...)`
+  - `MODULE_DEPEND(rk_cdn_dp, rk3399_power, 1, 1, 1)`
+  - no modular `clk` / `hwreset` / `phy` dependency metadata in the test copy
+- load in this order:
+  - `clk`
+  - `syscon`
+  - `hwreset`
+  - `phy`
+  - `rk3399_power`
+  - `rk_cdn_dp`
+
+With that setup in place, serial capture on `rp64dbg` shows the real attach
+path succeeding:
+
+- `rk_cdn_dp0: probe: compat=rockchip,rk3399-cdn-dp status_okay=1`
+- `rk_cdn_dp0: probe: compatible match accepted`
+- `rk_cdn_dp0: <Rockchip RK3399 Cadence DisplayPort scaffold> ... on ofwbus0`
+- `rk_cdn_dp0: attach-step: resources ok`
+- `rk_cdn_dp0: attach-step: power-domain lookup ok provider=present id=21`
+- `rk_cdn_dp0: attach-step: power-domain enable ok id=21`
+- `rk_cdn_dp0: attach-step: clocks ok`
+- `rk_cdn_dp0: attach-step: resets ok`
+- `rk_cdn_dp0: attach-step: phys ok count=1`
+- all four CDN-DP clocks enable successfully
+- all four resets deassert successfully
+- `phy_set_mode(0)` succeeds
+- `phy_enable(0)` succeeds
+- `rk_cdn_dp0: attach-step: enable sequence ok`
+- `rk_cdn_dp0: Cadence DP scaffold attached: phys=1 extcon=yes irq=present`
+- `rk_cdn_dp0: DP MMIO/AUX probe deferred; set hw.rk_cdn_dp_attach_debug_probe=1 for debug`
+
+This is the new important boundary:
+
+- the remaining blocker on `rp64dbg` is no longer module linkage
+- it is no longer early attach sequencing through power / clocks / resets /
+  PHY
+- the next narrowing pass starts after scaffold attach, around:
+  - AUX / DPCD reads
+  - extcon / Type-C state use
+  - link training
+  - DRM connector progression
+
 ## Current Conclusions
 
 What is known to be good enough so far:

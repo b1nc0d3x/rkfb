@@ -115,6 +115,50 @@ Current next blocker:
   - `rk_cdn_dp` bring-up
   - DRM connector handling
 
+## 2026-04-22 rp64dbg Module-First DP Checkpoint
+
+Module-first `rk_cdn_dp` bring-up on `rp64dbg` is now past the earlier
+linker and dependency failures.
+
+What is now verified:
+
+- the live RockPro64 DT on `rp64dbg` exposes the real DP node:
+  - `dp@fec00000 compat=rockchip,rk3399-cdn-dp`
+- `rk3399_power.ko` can be rebuilt to export
+  `rk3399_power_enable_domain`
+- `rk_cdn_dp.ko` can be rebuilt with an explicit
+  `MODULE_DEPEND(rk_cdn_dp, rk3399_power, 1, 1, 1)` for the module-first path
+- with the load order:
+  - `clk`
+  - `syscon`
+  - `hwreset`
+  - `phy`
+  - `rk3399_power`
+  - `rk_cdn_dp`
+  the module now probes and attaches on the real node
+- serial-confirmed attach milestones now succeed through:
+  - power-domain enable
+  - clock enables
+  - reset deassert
+  - PHY mode switch
+  - PHY enable
+- the board reaches:
+  - `Cadence DP scaffold attached: phys=1 extcon=yes irq=present`
+
+Why this matters:
+
+- the remaining DP blocker on `rp64dbg` is no longer module linkage or early
+  bring-up sequencing
+- `rk_cdn_dp` can now be narrowed safely as a module on the real board DT
+  instead of being baked into the kernel first
+
+Current next blocker:
+
+- the next work item is above scaffold attach:
+  - AUX / DPCD probing
+  - extcon / Type-C state consumption
+  - link-training and DRM connector progression
+
 ## Still In Progress
 
 This branch is not a complete desktop-grade DRM stack yet.
