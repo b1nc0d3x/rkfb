@@ -1,7 +1,7 @@
 /*-
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2026 Kyle T. Crenshaw
+ * Copyright (c) 2026 Kyle Crenshaw
  * All rights reserved.
  */
 
