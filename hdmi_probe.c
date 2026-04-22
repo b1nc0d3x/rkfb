@@ -3,14 +3,16 @@
  *
  * Userspace probe tool for rkfb driver.
  * Reads HDMI, VOP, GRF, and CRU registers via /dev/rkfb0 ioctl.
- * No writes — read-only, safe to run at any time.
+ * Read-only probe: does not attempt PHY, VOP, or clock writes.
  *
  * Build: cc -o hdmi_probe hdmi_probe.c
- * Run:   ./hdmi_probe
+ * Run:   sudo ./hdmi_probe
  */
 
 #include <stdio.h>
+#include <errno.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include "rkfb_ioctl.h"
@@ -78,17 +80,6 @@ cru_read(uint32_t off)
         return (ro.val);
 }
 
-
-static void
-vop_write(uint32_t off, uint32_t val)
-{
-        struct rkfb_regop ro;
-        ro.block = 0;
-        ro.off   = off;
-        ro.val   = val;
-        if (ioctl(g_fd, RKFB_REG_WRITE, &ro) < 0)
-                perror("ioctl VOP_REG_WRITE");
-}
 /* -------------------------------------------------------------------------
  * main
  * ---------------------------------------------------------------------- */
@@ -96,26 +87,36 @@ vop_write(uint32_t off, uint32_t val)
 int
 main(void)
 {
-        g_fd = open("/dev/rkfb0", O_RDWR);
+        struct rkfb_info info;
+
+        if (geteuid() != 0) {
+                fprintf(stderr, "hdmi_probe must run as root to open /dev/rkfb0\n");
+                return (1);
+        }
+
+        g_fd = open("/dev/rkfb0", O_RDONLY);
         if (g_fd < 0) {
-                perror("open /dev/rkfb0");
+                fprintf(stderr, "open /dev/rkfb0 failed: %s\n", strerror(errno));
                 return (1);
         }
 
         /* --- HDMI identification --------------------------------------- */
         printf("--- HDMI ID ---\n");
         printf("design_id  [0x0000] = 0x%02x\n", hdmi_read(0x0000));
-        printf("revision   [0x0004] = 0x%02x\n", hdmi_read(0x0004));
-        printf("product0   [0x0008] = 0x%02x\n", hdmi_read(0x0008));
-        printf("product1   [0x000c] = 0x%02x\n", hdmi_read(0x000c));
-        printf("config0    [0x0010] = 0x%02x\n", hdmi_read(0x0010));
-        printf("config1    [0x0014] = 0x%02x\n", hdmi_read(0x0014));
-        printf("config2    [0x0018] = 0x%02x\n", hdmi_read(0x0018));
+        printf("revision   [0x0001] = 0x%02x\n", hdmi_read(0x0001));
+        printf("product0   [0x0002] = 0x%02x\n", hdmi_read(0x0002));
+        printf("product1   [0x0003] = 0x%02x\n", hdmi_read(0x0003));
+        printf("config0    [0x0004] = 0x%02x\n", hdmi_read(0x0004));
+        printf("config1    [0x0005] = 0x%02x\n", hdmi_read(0x0005));
+        printf("config2    [0x0006] = 0x%02x\n", hdmi_read(0x0006));
 
         /* --- HDMI interrupt status ------------------------------------- */
         printf("\n--- HDMI Interrupts ---\n");
         printf("IH_PHY_STAT0    [0x0104] = 0x%02x\n", hdmi_read(0x0104));
+        printf("IH_I2CM_STAT0   [0x0105] = 0x%02x\n", hdmi_read(0x0105));
+        printf("IH_I2CMPHY_STAT0[0x0108] = 0x%02x\n", hdmi_read(0x0108));
         printf("IH_MUTE_PHY     [0x0184] = 0x%02x\n", hdmi_read(0x0184));
+        printf("IH_MUTE_I2CM    [0x0185] = 0x%02x\n", hdmi_read(0x0185));
         printf("IH_MUTE         [0x01ff] = 0x%02x\n", hdmi_read(0x01ff));
 
         /* --- PHY ------------------------------------------------------- */
@@ -129,6 +130,8 @@ main(void)
         printf("PHY_I2CM_INT    [0x3027] = 0x%02x\n", hdmi_read(0x3027));
         printf("PHY_I2CM_CTLINT [0x3028] = 0x%02x\n", hdmi_read(0x3028));
         printf("PHY_I2CM_DIV    [0x3029] = 0x%02x\n", hdmi_read(0x3029));
+        printf("PHY_I2CM_RSTZ   [0x302a] = 0x%02x\n", hdmi_read(0x302a));
+        printf("PHY_JTAG_CFG    [0x3034] = 0x%02x\n", hdmi_read(0x3034));
 
         /* --- Frame composer -------------------------------------------- */
         printf("\n--- Frame Composer ---\n");
@@ -149,10 +152,13 @@ main(void)
         printf("FC_INFREQ0      [0x100e] = 0x%02x\n", hdmi_read(0x100e));
         printf("FC_INFREQ1      [0x100f] = 0x%02x\n", hdmi_read(0x100f));
         printf("FC_INFREQ2      [0x1010] = 0x%02x\n", hdmi_read(0x1010));
-        printf("FC_AVICONF0     [0x1017] = 0x%02x\n", hdmi_read(0x1017));
-        printf("FC_AVICONF1     [0x1018] = 0x%02x\n", hdmi_read(0x1018));
-        printf("FC_AVICONF2     [0x1019] = 0x%02x\n", hdmi_read(0x1019));
-        printf("FC_AVIVID       [0x101b] = 0x%02x\n", hdmi_read(0x101b));
+        printf("FC_AVICONF3     [0x1017] = 0x%02x\n", hdmi_read(0x1017));
+        printf("FC_GCP          [0x1018] = 0x%02x\n", hdmi_read(0x1018));
+        printf("FC_AVICONF0     [0x1019] = 0x%02x\n", hdmi_read(0x1019));
+        printf("FC_AVICONF1     [0x101a] = 0x%02x\n", hdmi_read(0x101a));
+        printf("FC_AVICONF2     [0x101b] = 0x%02x\n", hdmi_read(0x101b));
+        printf("FC_AVIVID       [0x101c] = 0x%02x\n", hdmi_read(0x101c));
+        printf("FC_PACKET_TX_EN [0x10e3] = 0x%02x\n", hdmi_read(0x10e3));
 
         /* --- Video packetizer ------------------------------------------ */
         printf("\n--- Video Packetizer ---\n");
@@ -168,95 +174,85 @@ main(void)
         printf("MC_SWRSTZREQ    [0x4002] = 0x%02x\n", hdmi_read(0x4002));
         printf("MC_OPCTRL       [0x4003] = 0x%02x\n", hdmi_read(0x4003));
         printf("MC_FLOWCTRL     [0x4004] = 0x%02x\n", hdmi_read(0x4004));
+        printf("MC_PHYRSTZ      [0x4005] = 0x%02x\n", hdmi_read(0x4005));
+        printf("MC_LOCKONCLOCK  [0x4006] = 0x%02x\n", hdmi_read(0x4006));
+        printf("BASE_SFRDIVLOW  [0x4018] = 0x%02x\n", hdmi_read(0x4018));
+        printf("BASE_SFRDIVHIGH [0x4019] = 0x%02x\n", hdmi_read(0x4019));
+
+        /* --- Sink / DDC ------------------------------------------------ */
+        printf("\n--- Sink / DDC ---\n");
+        printf("A_HDCPCFG0      [0x5000] = 0x%02x\n", hdmi_read(0x5000));
+        printf("A_HDCPCFG1      [0x5001] = 0x%02x\n", hdmi_read(0x5001));
+        printf("A_VIDPOLCFG     [0x5009] = 0x%02x\n", hdmi_read(0x5009));
+        printf("PKT_SEND_CTL    [0x0640] = 0x%02x\n", hdmi_read(0x0640));
+        printf("I2CM_SLAVE      [0x7e00] = 0x%02x\n", hdmi_read(0x7e00));
+        printf("I2CM_ADDRESS    [0x7e01] = 0x%02x\n", hdmi_read(0x7e01));
+        printf("I2CM_DATAI      [0x7e03] = 0x%02x\n", hdmi_read(0x7e03));
+        printf("I2CM_OPERATION  [0x7e04] = 0x%02x\n", hdmi_read(0x7e04));
+        printf("I2CM_INT        [0x7e05] = 0x%02x\n", hdmi_read(0x7e05));
+        printf("I2CM_CTLINT     [0x7e06] = 0x%02x\n", hdmi_read(0x7e06));
+        printf("I2CM_DIV        [0x7e07] = 0x%02x\n", hdmi_read(0x7e07));
+        printf("I2CM_SOFTRSTZ   [0x7e09] = 0x%02x\n", hdmi_read(0x7e09));
+        printf("I2CM_RDBUF0..7  [0x7e20] = %02x %02x %02x %02x %02x %02x %02x %02x\n",
+            hdmi_read(0x7e20), hdmi_read(0x7e21), hdmi_read(0x7e22),
+            hdmi_read(0x7e23), hdmi_read(0x7e24), hdmi_read(0x7e25),
+            hdmi_read(0x7e26), hdmi_read(0x7e27));
 
         /* --- VOP WIN0 -------------------------------------------------- */
         printf("\n--- VOP WIN0 ---\n");
+        printf("REG_CFG_DONE    [0x0000] = 0x%08x\n", vop_read(0x0000));
         printf("SYS_CTRL        [0x0008] = 0x%08x\n", vop_read(0x0008));
+        printf("SYS_CTRL1       [0x000c] = 0x%08x\n", vop_read(0x000c));
         printf("DSP_CTRL0       [0x0010] = 0x%08x\n", vop_read(0x0010));
+        printf("DSP_CTRL1       [0x0014] = 0x%08x\n", vop_read(0x0014));
+        printf("DSP_BG          [0x0018] = 0x%08x\n", vop_read(0x0018));
         printf("WIN0_CTRL0      [0x0030] = 0x%08x\n", vop_read(0x0030));
+        printf("WIN0_CTRL1      [0x0034] = 0x%08x\n", vop_read(0x0034));
+        printf("WIN0_COLOR_KEY  [0x0038] = 0x%08x\n", vop_read(0x0038));
         printf("WIN0_VIR        [0x003c] = 0x%08x\n", vop_read(0x003c));
         printf("WIN0_YRGB_MST   [0x0040] = 0x%08x\n", vop_read(0x0040));
         printf("WIN0_CBR_MST    [0x0044] = 0x%08x\n", vop_read(0x0044));
         printf("WIN0_ACT_INFO   [0x0048] = 0x%08x\n", vop_read(0x0048));
         printf("WIN0_DSP_INFO   [0x004c] = 0x%08x\n", vop_read(0x004c));
         printf("WIN0_DSP_ST     [0x0050] = 0x%08x\n", vop_read(0x0050));
+        printf("WIN0_CTRL2      [0x006c] = 0x%08x\n", vop_read(0x006c));
+        printf("WIN0_SRC_ALPHA  [0x0060] = 0x%08x\n", vop_read(0x0060));
+        printf("WIN0_DST_ALPHA  [0x0064] = 0x%08x\n", vop_read(0x0064));
+        printf("DSP_BG_COLOR0   [0x01cc] = 0x%08x\n", vop_read(0x01cc));
+        printf("DSP_BG_COLOR1   [0x01d0] = 0x%08x\n", vop_read(0x01d0));
+        printf("WIN0_DSP_BG     [0x02b0] = 0x%08x\n", vop_read(0x02b0));
 
         /* --- CRU ------------------------------------------------------- */
         printf("\n--- CRU ---\n");
-        printf("CLKSEL49        [0x00c4] = 0x%08x\n", cru_read(0x00c4));
-        printf("CLKGATE16       [0x0240] = 0x%08x\n", cru_read(0x0240));
-        printf("CLKGATE17       [0x0244] = 0x%08x\n", cru_read(0x0244));
-        printf("CLKGATE18       [0x0248] = 0x%08x\n", cru_read(0x0248));
-        printf("CLKGATE19       [0x024c] = 0x%08x\n", cru_read(0x024c));
-        printf("CLKGATE20       [0x0250] = 0x%08x\n", cru_read(0x0250));
-        printf("CLKGATE21       [0x0254] = 0x%08x\n", cru_read(0x0254));
-        printf("CLKGATE22       [0x0258] = 0x%08x\n", cru_read(0x0258));
+        printf("CLKSEL42        [0x01a8] = 0x%08x\n", cru_read(0x01a8));
+        printf("CLKSEL43        [0x01ac] = 0x%08x\n", cru_read(0x01ac));
+        printf("CLKSEL47        [0x01bc] = 0x%08x\n", cru_read(0x01bc));
+        printf("CLKSEL48        [0x01c0] = 0x%08x\n", cru_read(0x01c0));
+        printf("CLKSEL49        [0x01c4] = 0x%08x\n", cru_read(0x01c4));
+        printf("CLKSEL50        [0x01c8] = 0x%08x\n", cru_read(0x01c8));
+        printf("CLKGATE10       [0x0328] = 0x%08x\n", cru_read(0x0328));
+        printf("CLKGATE11       [0x032c] = 0x%08x\n", cru_read(0x032c));
+        printf("CLKGATE28       [0x0370] = 0x%08x\n", cru_read(0x0370));
+        printf("CLKGATE29       [0x0374] = 0x%08x\n", cru_read(0x0374));
 
         /* --- GRF ------------------------------------------------------- */
         printf("\n--- GRF ---\n");
+        printf("GPIO4C_IOMUX    [0xE028] = 0x%08x\n", grf_read(0xE028));
+        printf("SOC_CON20       [0x6250] = 0x%08x\n", grf_read(0x6250));
         printf("SOC_STATUS5     [0x04e8] = 0x%08x\n", grf_read(0x04e8));
+        printf("\n--- FB Info ---\n");
+        memset(&info, 0, sizeof(info));
+        if (ioctl(g_fd, RKFB_GETINFO, &info) < 0) {
+                perror("RKFB_GETINFO");
+                close(g_fd);
+                return (1);
+        }
+        printf("fb_pa  = 0x%016llx\n", (unsigned long long)info.fb_pa);
+        printf("width  = %u\n", info.width);
+        printf("height = %u\n", info.height);
+        printf("stride = %u\n", info.stride);
+        printf("fb_size= %llu\n", (unsigned long long)info.fb_size);
 
-        printf("\n--- VOP write test ---\n");
-	printf("WIN0_YRGB_MST before = 0x%08x\n", vop_read(0x0040));
-	vop_write(0x0040, 0x12345678);
-	printf("WIN0_YRGB_MST after  = 0x%08x\n", vop_read(0x0040));
-	vop_write(0x0040, 0x00000000);  /* restore */
-
-
-
-	printf("\n--- VOP WIN0 scanout setup ---\n");
-
-	struct rkfb_info info;
-memset(&info, 0, sizeof(info));
-if (ioctl(g_fd, RKFB_GETINFO, &info) < 0) {
-        perror("RKFB_GETINFO");
-        close(g_fd);
-        return (1);
-}
-printf("\n--- FB Info ---\n");
-printf("fb_pa  = 0x%016llx\n", (unsigned long long)info.fb_pa);
-printf("width  = %u\n", info.width);
-printf("height = %u\n", info.height);
-printf("stride = %u\n", info.stride);
-
-printf("\n--- VOP WIN0 scanout setup ---\n");
-uint32_t fb_pa32 = (uint32_t)(info.fb_pa & 0xffffffff);
-
-/* Fill FB with a solid blue so we can see it */
-struct rkfb_fill fill;
-fill.pixel = 0xff0000ff;   /* ARGB blue */
-if (ioctl(g_fd, RKFB_CLEAR, &fill) < 0)
-        perror("RKFB_CLEAR");
-
-/* stride in 32-bit words = width = 1024 = 0x400 */
-uint32_t vir = (info.stride / 4) | ((info.stride / 4) << 16);
-uint32_t act = ((info.height - 1) << 16) | (info.width - 1);
-
-
-
-printf("fb_pa32 = 0x%08x\n", fb_pa32);
-printf("vir     = 0x%08x\n", vir);
-printf("act     = 0x%08x\n", act);	
-/* Our framebuffer physical address from rkfb load message */
-/* pa=0xc8400000 from dmesg */
-//uint32_t fb_pa = 0xc8400000;
-
-/* 1080p timing values */
-/* Active: 1920x1080, format ARGB8888 */
-/* VIR: stride in 32-bit words = 1920 = 0x780 */
-
-/* 1280x720, stride = 1280 words = 0x500 */
-vop_write(0x0040, fb_pa32);
-vop_write(0x003c, 0x05000500);    /* WIN0_VIR  — 1280-word stride */
-vop_write(0x0048, 0x02cf04ff);    /* WIN0_ACT_INFO — 720x1280     */
-vop_write(0x004c, 0x02cf04ff);    /* WIN0_DSP_INFO — same         */
-vop_write(0x0050, 0x00000000);    /* WIN0_DSP_ST                  */
-vop_write(0x0030, 0x00000011);    /* WIN0_CTRL0 — enable ARGB8888 */
-vop_write(0x0000, 0x00000001);    /* REG_CFG_DONE                 */
-
-printf("Scanout programmed. Check display.\n");
-printf("WIN0_CTRL0    = 0x%08x\n", vop_read(0x0030));
-printf("WIN0_YRGB_MST = 0x%08x\n", vop_read(0x0040));
         close(g_fd);
         return (0);
 }
