@@ -39,12 +39,6 @@ instead of disappearing into a silent reset path:
 
 ## Board Debug Setup
 
-Board under test:
-
-- host: `the dedicated debug board`
-- ssh port: `the configured board SSH port`
-- serial console: `the dedicated serial console at 1500000`
-
 Reference docs on the board:
 
 - `/home/admin/rkfb/RP64-DOCS/Rockchip RK3399 TRM V1.3 Part2.pdf`
@@ -159,6 +153,57 @@ Current state of that work:
 
 This is the current checkpoint before any further `rk_cdn_dp` reintegration.
 
+## 2026-04-22 USB-C IRQ Fix Follow-Up
+
+After reintegrating `fusb302` into the kernel and rebuilding the board kernel,
+the original USB-C interrupt-resource blocker was driven to a working fix.
+
+What is now verified live:
+
+- the board boots the rebuilt `RP64KERN_RKDRM` kernel with in-kernel
+  `rk3399_power`, `rk_typec_phy`, `rk_drm`, and `fusb302`
+- the `fusb302` child attaches and reports:
+  - `fusb3020 ... irq 82 on iicbus3`
+- descendant child IRQ allocation succeeds through the bus chain:
+  - `rk_i2c3`
+  - `ofwbus0`
+  - `nexus0`
+- descendant child IRQ activation succeeds
+- descendant child `bus_setup_intr()` succeeds
+- the critical live trace lines are:
+  - `nexus0: irq alloc fusb3020 ... -> ok`
+  - `ofwbus0: passthrough irq alloc fusb3020 ... -> ok`
+  - `rk_i2c3: child irq alloc fusb3020 ... -> ok`
+  - `rk_i2c3: child irq setup fusb3020 ... -> 0`
+  - `bus_generic_setup_intr: -> 0`
+- the board continues booting well past `fusb302` into later device attach
+  stages such as `pwm`, `i2s`, `pcm0`, and `armv8crypto0`
+
+Interpretation:
+
+- this is no longer a DT/OFW interrupt-discovery problem
+- this is no longer an IRQ reservation problem
+- this is no longer an IRQ activation problem
+- the earlier FreeBSD base-system bug was in descendant I2C child IRQ
+  propagation through the Rockchip `rk_i2c` bus path
+
+Local fix shape:
+
+- add explicit descendant child IRQ bridging in the Rockchip `rk_i2c` driver
+  for:
+  - `BUS_ALLOC_RESOURCE()`
+  - `BUS_ACTIVATE_RESOURCE()`
+  - `BUS_SETUP_INTR()`
+
+Current implication:
+
+- if USB-C display is still not working after this fix, the remaining blocker
+  has moved above the raw `fusb302` IRQ path into:
+  - Type-C state handling
+  - altmode / extcon negotiation
+  - `rk_cdn_dp`
+  - DRM connector bring-up
+
 ## Current Conclusions
 
 What is known to be good enough so far:
@@ -170,10 +215,13 @@ What is known to be good enough so far:
   setup when the debug probe is deferred
 - `rk3399_power` and `fusb302` are the first candidates being folded back into
   the kernel image
+- the original `fusb302` descendant IRQ allocation / activation / setup blocker
+  is fixed locally in the Rockchip `rk_i2c` bus path
 
 What remains suspect:
 
 - the `rk_cdn_dp` debug/AUX/MMIO bring-up path after scaffold attach
+- Type-C altmode / extcon state progression after `fusb302` interrupt setup
 - possible ordering or readiness problems around DP controller register access
 - possible asynchronous hardware fault surfacing after an earlier access
 
@@ -185,21 +233,29 @@ path, using the RK3399 TRM and design guide for register sequencing checks.
 Recommended sequence:
 
 1. Finish the current kernel install and reboot into the reintegrated image.
-2. Verify the board remains stable with in-kernel `rk3399_power` and
-   `fusb302`.
-3. Keep `rk_cdn_dp` out until the failing AUX / MMIO step is isolated.
-4. Capture fuller `ddb` state from the next panic involving `rk_cdn_dp`:
+2. Verify the board remains stable with in-kernel `rk3399_power`,
+   `rk_typec_phy`, and interrupt-driven `fusb302`.
+3. Keep HDMI unplugged and continue USB-C-only bring-up so Type-C / DP state
+   can be isolated without mixed display paths.
+4. Inspect live logs for the next post-IRQ blocker in:
+   - `fusb302`
+   - Type-C role / altmode state
+   - `rk_typec_phy`
+   - `rk_cdn_dp`
+   - `rk_drm`
+5. Keep `rk_cdn_dp` out until the failing AUX / MMIO step is isolated.
+6. Capture fuller `ddb` state from the next panic involving `rk_cdn_dp`:
    - `bt`
    - `show registers`
    - `show pcpu`
    - `show panic`
-5. Add tighter diagnostics around the debug-probe path in the test copy of
+7. Add tighter diagnostics around the debug-probe path in the test copy of
    `rk_cdn_dp`, especially before and after:
    - HPD status reads
    - AUX initialization
    - DPCD capability reads
    - any forced Type-C / HPD path
-6. Re-run with the smallest possible register-touch surface until the exact
+8. Re-run with the smallest possible register-touch surface until the exact
    operation that arms the `SError` is identified.
 
 ## Local Test Artifacts

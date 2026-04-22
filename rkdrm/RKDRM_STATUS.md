@@ -72,6 +72,49 @@ See the detailed checkpoint note here:
 
 - `rkdrm/RKDRM_RK3399_DP_DEBUG_CHECKPOINT_2026-04-21.md`
 
+## 2026-04-22 USB-C IRQ Fix Checkpoint
+
+USB-C bring-up on RK3399 is past the original `fusb302` interrupt-resource
+blocker.
+
+What is now verified:
+
+- the `fusb302` DT node carries a valid interrupt description
+- the running kernel resolves that child interrupt to mapped IRQ `82`
+- descendant child IRQ allocation now succeeds through:
+  - `rk_i2c`
+  - `ofwbus`
+  - `nexus`
+- descendant child IRQ activation now succeeds
+- descendant child `bus_setup_intr()` now succeeds
+- the live boot log shows:
+  - `rk_i2c3: child irq setup fusb3020 ... -> 0`
+  - `bus_generic_setup_intr: -> 0`
+- the board continues booting well past `fusb302` attach into later device
+  attach stages
+
+What was fixed in FreeBSD locally:
+
+- the Rockchip `rk_i2c` bus path now bridges descendant child IRQ allocation,
+  activation, and interrupt setup correctly for OFW/I2C children such as
+  `fusb3020`
+
+Why this matters:
+
+- this confirms the earlier blocker was a FreeBSD base-system bus propagation
+  bug, not a board DT description failure
+- `fusb302` is no longer limited to the polling/manual fallback because of a
+  missing interrupt resource
+
+Current next blocker:
+
+- if USB-C display still does not light up, the remaining fault is now above
+  raw `fusb302` IRQ setup, most likely in:
+  - Type-C state handling
+  - altmode / extcon negotiation
+  - `rk_cdn_dp` bring-up
+  - DRM connector handling
+
 ## Still In Progress
 
 This branch is not a complete desktop-grade DRM stack yet.
