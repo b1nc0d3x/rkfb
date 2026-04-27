@@ -384,3 +384,50 @@ Crash note:
 - Immediate source fix:
   - disable the async `rk_cdn_dp_rebind_task` path during staged bring-up
   - add a `detached` guard so mailbox MMIO returns `ENXIO` once teardown starts
+
+Latest TC-PHY state-machine result on stable `kernel.old`:
+- Reworked the post-boot `rk3399_tcphy_helper.ko` to mirror the real RK3399
+  DFP-DP order more closely:
+  - `typec_conn_dir`
+  - `tcphy_cfg_24m()`
+  - `tcphy_cfg_dp_pll()`
+  - `tcphy_dp_cfg_lane()` on all 4 lanes
+  - `PMA_LANE_CFG = PIN_ASSIGN_C_E`
+  - `DP_MODE_ENTER_A2`
+  - poll `PMA_CMN_CTRL1[0]`
+  - deassert `uphy-pipe`
+  - `tcphy_dp_aux_calibration()`
+  - `DP_MODE_ENTER_A0`
+  - poll `DP_MODE_CTL[4]`
+- Raw register values from the live failing path:
+  - `PMA_CMN_CTRL1 = 0x833`
+  - `DP_MODE_CTL = 0xc181`
+- Meaning:
+  - `PMA_CMN_CTRL1[0] = 1`, so PMA/common PLL side is ready
+  - `DP_MODE_CTL[4] = 0`, so A0 ready never asserts
+  - `0xc181` shows the A0 request was received while the block still reports
+    A2 status, rather than reaching A0 ready
+- Added a helper-side `uphy-pipe` reset deassert after the PMA-ready poll.
+  That step now succeeds and is included in `last_applied_mask`, but it still
+  does not produce A0 ready.
+- With `uphy-pipe` deassert now present, the helper still settles at:
+  - `last_error=60`
+  - `last_applied_mask=4095`
+  - `last_pma_cmn_ctrl1=0x833`
+  - `last_dp_mode_ctl=0xc181`
+- `rk_cdn_dp` remains unchanged after that:
+  - `dev.rk_cdn_dp.0.stage=12`
+  - `dev.rk_cdn_dp.0.mbox_last_send_written=0`
+  - `dev.rk_cdn_dp.0.mbox_last_full=1`
+  - `dev.rk_cdn_dp.0.mbox_last_empty=1`
+  - `dev.rk_cdn_dp.0.mbox_last_header=0`
+
+What this eliminates:
+- The remaining blocker is not:
+  - missing DTB board properties
+  - missing helper-fed Alt Mode bridge consumption
+  - missing PMA ready
+  - missing `uphy-pipe` deassert in the post-boot helper
+- The hard gate is now narrower:
+  - TC-PHY still does not reach `DP_MODE_A0`
+  - so Cadence still never accepts byte 0 of the first real `READ_DPCD`
