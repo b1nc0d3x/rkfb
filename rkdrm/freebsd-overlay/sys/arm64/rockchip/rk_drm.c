@@ -31,6 +31,7 @@
 #include <sys/bus.h>
 #include <sys/fbio.h>
 #include <sys/kernel.h>
+#include <sys/linker.h>
 #include <sys/malloc.h>
 #include <sys/module.h>
 #include <sys/pctrie.h>
@@ -52,7 +53,10 @@
 #include <dev/ofw/ofw_bus.h>
 #include <dev/ofw/ofw_bus_subr.h>
 
+#include <arm64/rockchip/rk3399_typec_altmode_var.h>
+
 #include "rk_drm.h"
+#include "rk_dp_forced_mode.h"
 #include "fb_if.h"
 
 static struct ofw_compat_data rk_drm_compat_data[] = {
@@ -96,17 +100,567 @@ static void rk_drm_cancel_page_flip(struct rk_drm_softc *sc,
 static int rk_drm_vblank_ticks_from_mode(const struct drm_display_mode *mode);
 static int rk_drm_hw_modeset_locked(struct rk_drm_softc *sc,
     const struct drm_display_mode *mode);
+static int rk_drm_hw_modeset_dp_locked(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode);
 static void rk_drm_hw_disable_locked(struct rk_drm_softc *sc);
 static int rk_drm_hw_set_scanout_locked(struct rk_drm_softc *sc,
     vm_paddr_t paddr, uint32_t stride);
+static int rk_drm_sysctl_fb_dump(SYSCTL_HANDLER_ARGS);
+static int rk_drm_sysctl_fb_fill(SYSCTL_HANDLER_ARGS);
+static int rk_drm_fb_get_active_mapping(struct rk_drm_softc *sc,
+    vm_offset_t *va, vm_paddr_t *pa, size_t *size, uint32_t *stride,
+    const char **source);
 static bool rk_drm_hw_hpd_locked(struct rk_drm_softc *sc);
 static bool rk_drm_output_enabled_locked(struct rk_drm_softc *sc);
 static void rk_drm_lastclose(struct drm_device *drm_dev);
+static bool rk_drm_dp_altmode_connected(void);
+static bool rk_drm_dp_cached_edid(uint8_t *buf, size_t len);
+static bool rk_drm_mode_from_edid_dtd(struct drm_display_mode *mode,
+    const uint8_t *edid, size_t len);
+static void rk_drm_mode_fill_default(struct drm_display_mode *mode);
+static void rk_drm_log_connector_modes(struct rk_drm_softc *sc,
+    struct drm_connector *connector);
+static void rk_drm_prefer_usbc_dp_mode(struct rk_drm_softc *sc,
+    struct drm_connector *connector);
+static bool rk_drm_pick_connector_mode(struct rk_drm_softc *sc,
+    struct drm_display_mode *mode);
+static void rk_drm_fill_forced_dp_mode(struct drm_display_mode *mode);
+static void rk_drm_dp_mode_fill(struct drm_display_mode *mode);
+static bool rk_drm_mode_is_usbc_fallback(const struct drm_display_mode *mode);
+static void rk_drm_fb_target_size(uint32_t *width, uint32_t *height);
+static uint32_t rk_drm_fb_pitch_bytes(uint32_t width);
+static int (*rk_drm_lookup_cdn_auto_bringup(void))(void);
+static int (*rk_drm_lookup_cdn_enable_mode(void))(uint32_t clock,
+    uint16_t hdisplay, uint16_t hsync_start, uint16_t hsync_end,
+    uint16_t htotal, uint16_t vdisplay, uint16_t vsync_start,
+    uint16_t vsync_end, uint16_t vtotal, uint32_t flags);
+static int (*rk_drm_lookup_set_video_active(void))(bool);
+static void rk_drm_try_usbc_autobringup(struct rk_drm_softc *sc);
+static int rk_drm_sysctl_hdmi_modeset_now(SYSCTL_HANDLER_ARGS);
+static int rk_drm_sysctl_output_select(SYSCTL_HANDLER_ARGS);
+static bool rk_drm_hdmi_hpd_locked(struct rk_drm_softc *sc);
+static int rk_drm_output_route_locked(struct rk_drm_softc *sc);
 
+static int rk_drm_output_default = RK_DRM_OUTPUT_USBC_DP;
+TUNABLE_INT("hw.rk_drm.output", &rk_drm_output_default);
+
+static int
+rk_drm_lookup_dp_altmode_status_cb(linker_file_t lf, void *arg)
+{
+	caddr_t sym;
+
+	sym = linker_file_lookup_symbol(lf, "fusb302_get_dp_altmode_state", 0);
+	if (sym == 0)
+		return (0);
+	*(caddr_t *)arg = sym;
+	return (1);
+}
+
+static int
+(*rk_drm_lookup_dp_altmode_status(void))(device_t,
+    struct rk3399_typec_dp_altmode_status *)
+{
+	caddr_t sym;
+
+	sym = 0;
+	(void)linker_file_foreach(rk_drm_lookup_dp_altmode_status_cb, &sym);
+	return ((int (*)(device_t, struct rk3399_typec_dp_altmode_status *))sym);
+}
+
+static int
+rk_drm_lookup_cdn_edid_cb(linker_file_t lf, void *arg)
+{
+	caddr_t sym;
+
+	sym = linker_file_lookup_symbol(lf, "rk_cdn_dp_get_cached_edid", 0);
+	if (sym == 0)
+		return (0);
+	*(caddr_t *)arg = sym;
+	return (1);
+}
+
+static int
+(*rk_drm_lookup_cdn_edid(void))(device_t, uint8_t *, size_t)
+{
+	caddr_t sym;
+
+	sym = 0;
+	(void)linker_file_foreach(rk_drm_lookup_cdn_edid_cb, &sym);
+	return ((int (*)(device_t, uint8_t *, size_t))sym);
+}
+
+static int
+rk_drm_lookup_set_video_active_cb(linker_file_t lf, void *arg)
+{
+	caddr_t sym;
+
+	sym = linker_file_lookup_symbol(lf,
+	    "rk_cdn_dp_set_video_active_first", 0);
+	if (sym == 0)
+		return (0);
+	*(caddr_t *)arg = sym;
+	return (1);
+}
+
+static int
+rk_drm_lookup_cdn_enable_mode_cb(linker_file_t lf, void *arg)
+{
+	caddr_t sym;
+
+	sym = linker_file_lookup_symbol(lf, "rk_cdn_dp_enable_mode", 0);
+	if (sym == 0)
+		return (0);
+	*(caddr_t *)arg = sym;
+	return (1);
+}
+
+static int
+rk_drm_lookup_cdn_auto_bringup_cb(linker_file_t lf, void *arg)
+{
+	caddr_t sym;
+
+	sym = linker_file_lookup_symbol(lf, "rk_cdn_dp_auto_bringup_default", 0);
+	if (sym == 0)
+		return (0);
+	*(caddr_t *)arg = sym;
+	return (1);
+}
+
+static int
+(*rk_drm_lookup_cdn_auto_bringup(void))(void)
+{
+	caddr_t sym;
+
+	sym = 0;
+	(void)linker_file_foreach(rk_drm_lookup_cdn_auto_bringup_cb, &sym);
+	return ((int (*)(void))sym);
+}
+
+static int
+rk_drm_lookup_cdn_retrain_cb(linker_file_t lf, void *arg)
+{
+	caddr_t sym;
+
+	sym = linker_file_lookup_symbol(lf, "rk_cdn_dp_retrain_default", 0);
+	if (sym == 0)
+		return (0);
+	*(caddr_t *)arg = sym;
+	return (1);
+}
+
+static int
+(*rk_drm_lookup_cdn_retrain(void))(void)
+{
+	caddr_t sym;
+
+	sym = 0;
+	(void)linker_file_foreach(rk_drm_lookup_cdn_retrain_cb, &sym);
+	return ((int (*)(void))sym);
+}
+
+static int
+(*rk_drm_lookup_cdn_enable_mode(void))(uint32_t clock, uint16_t hdisplay,
+    uint16_t hsync_start, uint16_t hsync_end, uint16_t htotal,
+    uint16_t vdisplay, uint16_t vsync_start, uint16_t vsync_end,
+    uint16_t vtotal, uint32_t flags)
+{
+	caddr_t sym;
+
+	sym = 0;
+	(void)linker_file_foreach(rk_drm_lookup_cdn_enable_mode_cb, &sym);
+	return ((int (*)(uint32_t, uint16_t, uint16_t, uint16_t, uint16_t,
+	    uint16_t, uint16_t, uint16_t, uint16_t, uint32_t))sym);
+}
+
+static void
+rk_drm_try_usbc_autobringup(struct rk_drm_softc *sc)
+{
+	int (*cdn_auto_bringup)(void);
+	int (*set_video_active)(bool);
+	struct drm_display_mode mode;
+	int error;
+
+	if (sc->dp_autobring_done)
+		return;
+	if (sc->output_select != RK_DRM_OUTPUT_USBC_DP)
+		return;
+
+	cdn_auto_bringup = rk_drm_lookup_cdn_auto_bringup();
+	if (cdn_auto_bringup == NULL)
+		return;
+
+	error = cdn_auto_bringup();
+	if (error != 0) {
+		device_printf(sc->dev, "USB-C DP auto bring-up failed: %d\n",
+		    error);
+		return;
+	}
+
+	rk_drm_dp_mode_fill(&mode);
+	error = rk_drm_hw_modeset_dp_locked(sc, &mode);
+	if (error != 0) {
+		device_printf(sc->dev,
+		    "USB-C DP post-bringup modeset failed: %d\n", error);
+		return;
+	}
+
+	set_video_active = rk_drm_lookup_set_video_active();
+	if (set_video_active != NULL) {
+		error = set_video_active(true);
+		device_printf(sc->dev,
+		    "USB-C DP auto bring-up: framer re-arm err=%d\n", error);
+	}
+
+	sc->dp_autobring_done = true;
+}
+
+static int
+(*rk_drm_lookup_set_video_active(void))(bool)
+{
+	caddr_t sym;
+
+	sym = 0;
+	(void)linker_file_foreach(rk_drm_lookup_set_video_active_cb, &sym);
+	return ((int (*)(bool))sym);
+}
+
+static bool
+rk_drm_dp_altmode_connected(void)
+{
+	int (*get_status)(device_t, struct rk3399_typec_dp_altmode_status *);
+	struct rk3399_typec_dp_altmode_status status;
+	devclass_t dc;
+	device_t dev;
+
+	dc = devclass_find("fusb302");
+	if (dc == NULL)
+		return (false);
+	dev = devclass_get_device(dc, 0);
+	if (dev == NULL)
+		return (false);
+	get_status = rk_drm_lookup_dp_altmode_status();
+	if (get_status == NULL)
+		return (false);
+	if (get_status(dev, &status) != 0 || !status.valid || !status.dp_ready)
+		return (false);
+	if ((status.pin_assignment & 0x3c) == 0)
+		return (false);
+	return ((status.dp_status & (1u << 7)) != 0);
+}
+
+static bool
+rk_drm_dp_cached_edid(uint8_t *buf, size_t len)
+{
+	int (*get_edid)(device_t, uint8_t *, size_t);
+	devclass_t dc;
+	device_t dev;
+
+	if (buf == NULL || len < 128)
+		return (false);
+	dc = devclass_find("rk_cdn_dp");
+	if (dc == NULL)
+		return (false);
+	dev = devclass_get_device(dc, 0);
+	if (dev == NULL)
+		return (false);
+	get_edid = rk_drm_lookup_cdn_edid();
+	if (get_edid == NULL)
+		return (false);
+	return (get_edid(dev, buf, len) == 0);
+}
+
+static void
+rk_drm_log_connector_modes(struct rk_drm_softc *sc, struct drm_connector *connector)
+{
+	struct drm_display_mode *iter;
+	int i;
+
+	if (sc == NULL || connector == NULL)
+		return;
+
+	i = 0;
+	list_for_each_entry(iter, &connector->modes, head) {
+		device_printf(sc->dev,
+		    "DP connector mode[%d]: %s %ux%u@%d clock=%d type=0x%x flags=0x%x status=%d\n",
+		    i, iter->name, iter->hdisplay, iter->vdisplay,
+		    drm_mode_vrefresh(iter), iter->clock, iter->type,
+		    iter->flags, iter->status);
+		i++;
+	}
+}
+
+/*
+ * Bias the DRM mode picker toward the forced mode defined in
+ * rk_dp_forced_mode.h, so the connector's preferred-timing flag lines
+ * up with what the framer/VOP actually drive.
+ */
+static bool
+rk_drm_mode_is_forced(const struct drm_display_mode *mode)
+{
+	if (mode == NULL)
+		return (false);
+	return (mode->hdisplay == RK_DP_FORCED_HDISPLAY &&
+	    mode->vdisplay == RK_DP_FORCED_VDISPLAY &&
+	    mode->clock >= RK_DP_FORCED_CLOCK_LO &&
+	    mode->clock <= RK_DP_FORCED_CLOCK_HI);
+}
+
+static void
+rk_drm_prefer_usbc_dp_mode(struct rk_drm_softc *sc, struct drm_connector *connector)
+{
+	struct drm_display_mode *iter, *forced;
+
+	if (sc == NULL || connector == NULL ||
+	    sc->output_select != RK_DRM_OUTPUT_USBC_DP)
+		return;
+
+	/*
+	 * Inject our forced DP mode (rk_dp_forced_mode.h) into the
+	 * connector's probed_modes list as the preferred timing.
+	 *
+	 * Why inject instead of just biasing the existing list:
+	 * - EDID-derived modes (e.g. CEA VIC 16 1920x1080p60 PHSYNC) are
+	 *   the ones the panel actually REJECTS — backlight stays off.
+	 * - Our custom DMT-style timing (NHSYNC+wide hsync 144) is what
+	 *   the panel actually accepts, but it isn't in the EDID.
+	 * - Userspace (Xorg, SLIM, fb_helper) picks a mode from
+	 *   connector->modes when allocating GEM framebuffers.  If our
+	 *   timing isn't in the list, Xorg falls back to a 1024x768
+	 *   default fb, scanning out 1024-wide content into a 1920-wide
+	 *   active area → fuzzy display.
+	 *
+	 * By injecting + marking preferred, we get Xorg to allocate a
+	 * 1920x1080 GEM fb with matching stride, and the scanout
+	 * pipeline ends up coherent end-to-end.
+	 */
+	list_for_each_entry(iter, &connector->probed_modes, head)
+		iter->type &= ~DRM_MODE_TYPE_PREFERRED;
+
+	forced = drm_mode_create(connector->dev);
+	if (forced == NULL) {
+		device_printf(sc->dev,
+		    "USB-C DP: drm_mode_create failed; falling back to EDID modes\n");
+		return;
+	}
+	rk_drm_fill_forced_dp_mode(forced);
+	forced->status = MODE_OK;
+	drm_mode_probed_add(connector, forced);
+
+	device_printf(sc->dev,
+	    "USB-C DP: injected forced mode %s %ux%u@%d clock=%d type=0x%x\n",
+	    forced->name, forced->hdisplay, forced->vdisplay,
+	    drm_mode_vrefresh(forced), forced->clock, forced->type);
+}
+
+static bool
+rk_drm_pick_connector_mode(struct rk_drm_softc *sc, struct drm_display_mode *mode)
+{
+	struct drm_display_mode *iter, *chosen;
+	int count;
+
+	if (sc == NULL || mode == NULL)
+		return (false);
+
+	sx_xlock(&sc->drm_dev.mode_config.mutex);
+	count = drm_helper_probe_single_connector_modes(&sc->connector,
+	    RK_DRM_MAX_WIDTH, RK_DRM_MAX_HEIGHT);
+	if (count <= 0 || list_empty(&sc->connector.modes)) {
+		sx_xunlock(&sc->drm_dev.mode_config.mutex);
+		return (false);
+	}
+
+	rk_drm_log_connector_modes(sc, &sc->connector);
+
+	chosen = NULL;
+	list_for_each_entry(iter, &sc->connector.modes, head) {
+		if ((iter->type & DRM_MODE_TYPE_PREFERRED) != 0) {
+			chosen = iter;
+			break;
+		}
+		if (chosen == NULL)
+			chosen = iter;
+	}
+	if (chosen != NULL)
+		*mode = *chosen;
+	sx_xunlock(&sc->drm_dev.mode_config.mutex);
+
+	if (chosen == NULL)
+		return (false);
+	device_printf(sc->dev,
+	    "DP connector chose mode: %s %ux%u@%d clock=%d type=0x%x flags=0x%x\n",
+	    chosen->name, chosen->hdisplay, chosen->vdisplay,
+	    drm_mode_vrefresh(chosen), chosen->clock, chosen->type,
+	    chosen->flags);
+	return (true);
+}
+
+static bool
+rk_drm_mode_from_edid_dtd(struct drm_display_mode *mode, const uint8_t *edid,
+    size_t len)
+{
+	const uint8_t *d;
+	uint32_t pixclk;
+	uint16_t hactive, hblank, hsync_off, hsync_pulse, htotal;
+	uint16_t vactive, vblank, vsync_off, vsync_pulse, vtotal;
+
+	if (mode == NULL || edid == NULL || len < 128)
+		return (false);
+
+	d = &edid[0x36];
+	pixclk = (uint32_t)d[0] | ((uint32_t)d[1] << 8);
+	pixclk *= 10;
+	if (pixclk == 0)
+		return (false);
+
+	hactive = (uint16_t)d[2] | ((uint16_t)(d[4] & 0xf0) << 4);
+	hblank = (uint16_t)d[3] | ((uint16_t)(d[4] & 0x0f) << 8);
+	vactive = (uint16_t)d[5] | ((uint16_t)(d[7] & 0xf0) << 4);
+	vblank = (uint16_t)d[6] | ((uint16_t)(d[7] & 0x0f) << 8);
+	hsync_off = (uint16_t)d[8] | ((uint16_t)(d[11] & 0xc0) << 2);
+	hsync_pulse = (uint16_t)d[9] | ((uint16_t)(d[11] & 0x30) << 4);
+	vsync_off = (uint16_t)(d[10] >> 4) | ((uint16_t)(d[11] & 0x0c) << 2);
+	vsync_pulse = (uint16_t)(d[10] & 0x0f) |
+	    ((uint16_t)(d[11] & 0x03) << 4);
+	if (hactive == 0 || vactive == 0)
+		return (false);
+
+	htotal = hactive + hblank;
+	vtotal = vactive + vblank;
+
+	memset(mode, 0, sizeof(*mode));
+	mode->clock = pixclk;
+	mode->hdisplay = hactive;
+	mode->hsync_start = hactive + hsync_off;
+	mode->hsync_end = mode->hsync_start + hsync_pulse;
+	mode->htotal = htotal;
+	mode->vdisplay = vactive;
+	mode->vsync_start = vactive + vsync_off;
+	mode->vsync_end = mode->vsync_start + vsync_pulse;
+	mode->vtotal = vtotal;
+	mode->flags = 0;
+	if ((d[17] & (1U << 1)) != 0)
+		mode->flags |= DRM_MODE_FLAG_PHSYNC;
+	else
+		mode->flags |= DRM_MODE_FLAG_NHSYNC;
+	if ((d[17] & (1U << 2)) != 0)
+		mode->flags |= DRM_MODE_FLAG_PVSYNC;
+	else
+		mode->flags |= DRM_MODE_FLAG_NVSYNC;
+	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
+	return (true);
+}
+
+static void
+rk_drm_fill_forced_dp_mode(struct drm_display_mode *mode)
+{
+	/*
+	 * Values come from rk_dp_forced_mode.h; edit there to experiment.
+	 * Both this function and rk_cdn_dp_fill_forced_mode() consume the
+	 * same header and MUST stay in sync.
+	 */
+	memset(mode, 0, sizeof(*mode));
+	mode->clock = RK_DP_FORCED_CLOCK_KHZ;
+	mode->hdisplay = RK_DP_FORCED_HDISPLAY;
+	mode->hsync_start = RK_DP_FORCED_HSYNC_START;
+	mode->hsync_end = RK_DP_FORCED_HSYNC_END;
+	mode->htotal = RK_DP_FORCED_HTOTAL;
+	mode->vdisplay = RK_DP_FORCED_VDISPLAY;
+	mode->vsync_start = RK_DP_FORCED_VSYNC_START;
+	mode->vsync_end = RK_DP_FORCED_VSYNC_END;
+	mode->vtotal = RK_DP_FORCED_VTOTAL;
+	mode->flags = (RK_DP_FORCED_H_POLARITY ? DRM_MODE_FLAG_PHSYNC :
+	    DRM_MODE_FLAG_NHSYNC) |
+	    (RK_DP_FORCED_V_POLARITY ? DRM_MODE_FLAG_PVSYNC :
+	    DRM_MODE_FLAG_NVSYNC);
+	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
+	drm_mode_set_name(mode);
+}
+
+static void
+rk_drm_dp_mode_fill(struct drm_display_mode *mode)
+{
+	struct rk_drm_softc *sc;
+	devclass_t dc;
+	device_t dev;
+
+	dc = devclass_find("rk_drm");
+	dev = dc != NULL ? devclass_get_device(dc, 0) : NULL;
+	sc = dev != NULL ? device_get_softc(dev) : NULL;
+
+	rk_drm_fill_forced_dp_mode(mode);
+	if (sc != NULL) {
+		device_printf(sc->dev,
+		    "DP connector forcing mode: %s %ux%u@%d clock=%d flags=0x%x\n",
+		    mode->name, mode->hdisplay, mode->vdisplay,
+		    drm_mode_vrefresh(mode), mode->clock, mode->flags);
+	}
+}
+
+static void
+rk_drm_fb_target_size(uint32_t *width, uint32_t *height)
+{
+	struct rk_drm_softc *sc;
+	devclass_t dc;
+	device_t dev;
+
+	dc = devclass_find("rk_drm");
+	dev = dc != NULL ? devclass_get_device(dc, 0) : NULL;
+	sc = dev != NULL ? device_get_softc(dev) : NULL;
+
+	if (sc != NULL && sc->output_select == RK_DRM_OUTPUT_USBC_DP) {
+		if (width != NULL)
+			*width = RK_DP_FORCED_HDISPLAY;
+		if (height != NULL)
+			*height = RK_DP_FORCED_VDISPLAY;
+		return;
+	}
+
+	if (width != NULL)
+		*width = RK_DRM_DEFAULT_WIDTH;
+	if (height != NULL)
+		*height = RK_DRM_DEFAULT_HEIGHT;
+}
+
+static uint32_t
+rk_drm_fb_pitch_bytes(uint32_t width)
+{
+
+	return (roundup2(width, 16) * (RK_DRM_BPP / 8));
+}
+
+/*
+ * rk_drm_mode_fill_default
+ *
+ * Stamp `mode` with our 1080p60 baseline (the same clock the HDMI PHY
+ * is initialized for at attach).  Used wherever we need to hand DRM a
+ * mode but don't have one from EDID yet -- the initial fb_helper
+ * setup, the scanout-not-ready fallback, etc.  Callers that have a
+ * real EDID-bounded mode should use that instead.
+ */
 static void
 rk_drm_mode_fill_default(struct drm_display_mode *mode)
 {
+	struct rk_drm_softc *sc;
+	devclass_t dc;
+	device_t dev;
+
+	dc = devclass_find("rk_drm");
+	dev = dc != NULL ? devclass_get_device(dc, 0) : NULL;
+	sc = dev != NULL ? device_get_softc(dev) : NULL;
+
 	memset(mode, 0, sizeof(*mode));
+	if (sc != NULL && sc->output_select == RK_DRM_OUTPUT_USBC_DP) {
+		/*
+		 * USB-C DP pre-EDID fallback.  Use the same forced mode as the
+		 * EDID-bound path so fbdev / Xorg sees a single coherent
+		 * resolution from boot onward.  Previous 1024x768 fallback
+		 * caused Xorg to allocate a 1024-wide GEM fb that didn't match
+		 * VOP's forced 1920-wide scanout — fuzzy display.
+		 */
+		rk_drm_fill_forced_dp_mode(mode);
+		return;
+	}
+
 	mode->clock = RK_DRM_DEFAULT_CLOCK_KHZ;
 	mode->hdisplay = RK_DRM_DEFAULT_WIDTH;
 	mode->hsync_start = RK_DRM_DEFAULT_HSYNC_START;
@@ -120,6 +674,14 @@ rk_drm_mode_fill_default(struct drm_display_mode *mode)
 	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
 }
 
+/*
+ * rk_drm_output_poll_changed
+ *
+ * DRM mode-config callback fired when the HPD poller decides the
+ * output state may have changed.  We forward the event into the
+ * fb_helper layer so the kernel framebuffer console resizes /
+ * redraws in response to a hot-plug event without userland help.
+ */
 static void
 rk_drm_output_poll_changed(struct drm_device *drm_dev)
 {
@@ -130,6 +692,31 @@ rk_drm_output_poll_changed(struct drm_device *drm_dev)
 		drm_fb_helper_hotplug_event(&sc->fbdev->fb_helper);
 }
 
+static bool
+rk_drm_mode_is_usbc_fallback(const struct drm_display_mode *mode)
+{
+	if (mode == NULL)
+		return (false);
+
+	return (mode->clock == 65000 &&
+	    mode->hdisplay == 1024 &&
+	    mode->vdisplay == 768 &&
+	    mode->hsync_start == 1048 &&
+	    mode->hsync_end == 1184 &&
+	    mode->htotal == 1344 &&
+	    mode->vsync_start == 771 &&
+	    mode->vsync_end == 777 &&
+	    mode->vtotal == 806);
+}
+
+/*
+ * rk_drm_crtc_index
+ *
+ * Translate a drm_crtc pointer to its index in the device's CRTC
+ * list.  vblank APIs are pipe-indexed (0, 1, ...) rather than crtc-
+ * pointer-keyed, so we have to walk the list to convert.  Returns
+ * -1 if the crtc isn't on the list (defensive; shouldn't happen).
+ */
 static int
 rk_drm_crtc_index(struct drm_crtc *crtc)
 {
@@ -147,6 +734,15 @@ rk_drm_crtc_index(struct drm_crtc *crtc)
 	return (-1);
 }
 
+/*
+ * rk_drm_vblank_ticks_from_mode
+ *
+ * Compute the number of system ticks (1/hz seconds) per refresh frame
+ * for the given mode.  We use this to schedule the vblank task at the
+ * correct cadence: ticks = hz * (htotal * vtotal) / (pixel_clock_Hz).
+ * Returns at least 1 tick so the callout always advances; falls back
+ * to ~16.6 ms (60 Hz) if the mode is missing or has zero clock.
+ */
 static int
 rk_drm_vblank_ticks_from_mode(const struct drm_display_mode *mode)
 {
@@ -165,11 +761,22 @@ rk_drm_vblank_ticks_from_mode(const struct drm_display_mode *mode)
 	return ((int)MAX((numerator + denominator - 1) / denominator, 1ULL));
 }
 
+/*
+ * rk_drm_hw_modeset_locked
+ *
+ * Thin wrapper: take sc->hw_lock around rk_drm_hw_modeset() (the
+ * register-level routine), so callers in a non-locked context (sysctl
+ * handlers, DRM callbacks) can safely re-program the VOP/HDMI without
+ * racing concurrent register access.
+ */
 static int
 rk_drm_hw_modeset_locked(struct rk_drm_softc *sc,
     const struct drm_display_mode *mode)
 {
 	int error;
+
+	if (rk_drm_output_route_locked(sc) == RK_DRM_OUTPUT_USBC_DP)
+		return (rk_drm_hw_modeset_dp_locked(sc, mode));
 
 	mtx_lock(&sc->hw_lock);
 	error = rk_drm_hw_modeset(sc, mode);
@@ -177,6 +784,442 @@ rk_drm_hw_modeset_locked(struct rk_drm_softc *sc,
 	return (error);
 }
 
+/*
+ * rk_drm_hw_modeset_dp_locked
+ *
+ * As above, but for the eDP/USB-C-DP path (rk_drm_hw_modeset_dp).
+ * Keeps modeset_dp serialized with the rest of the HW operations.
+ */
+static int
+rk_drm_hw_modeset_dp_locked(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
+{
+	int error;
+
+	mtx_lock(&sc->hw_lock);
+	error = rk_drm_hw_modeset_dp(sc, mode);
+	mtx_unlock(&sc->hw_lock);
+	return (error);
+}
+
+/*
+ * Sysctl handler: write 1 to dev.rk_drm.0.dp_modeset_now to drive the
+ * VOP -> eDP path with a hardcoded 1080p60 timing. Caller is expected
+ * to have run rk_cdn_dp stages 1..19 first so the firmware framer is
+ * ready to consume pixels.
+ */
+static int
+rk_drm_sysctl_hdmi_modeset_now(SYSCTL_HANDLER_ARGS)
+{
+	struct rk_drm_softc *sc;
+	struct drm_display_mode mode;
+	int error, val = 0;
+
+	sc = arg1;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != 1)
+		return (EINVAL);
+
+	rk_drm_mode_fill_default(&mode);
+	sc->output_select = RK_DRM_OUTPUT_HDMI;
+	return (rk_drm_hw_modeset_locked(sc, &mode));
+}
+
+static int
+rk_drm_sysctl_dp_modeset_now(SYSCTL_HANDLER_ARGS)
+{
+	struct rk_drm_softc *sc;
+	struct drm_display_mode mode;
+	struct drm_framebuffer *fb;
+	int error, val = 0;
+
+	sc = arg1;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != 1)
+		return (EINVAL);
+
+	rk_drm_dp_mode_fill(&mode);
+	sc->output_select = RK_DRM_OUTPUT_USBC_DP;
+	error = rk_drm_hw_modeset_dp_locked(sc, &mode);
+	if (error == 0) {
+		/*
+		 * Re-arm the Cadence dptx framer now that VOP is producing
+		 * pixels. Mirrors reference vendor BSP cdn_dp_encoder_enable's final
+		 * set_video_status(VIDEO_VALID) which runs as part of the
+		 * atomic commit alongside crtc enable. In our staged flow
+		 * stage 19 sent VALID *before* this modeset programmed VOP,
+		 * so the dptx firmware latched a blank input and never
+		 * re-evaluated. Resending VALID after VOP is live makes the
+		 * framer pick up the now-running pixel stream.
+		 */
+		int (*set_video_active)(bool) =
+		    rk_drm_lookup_set_video_active();
+		if (set_video_active != NULL) {
+			int verr = set_video_active(true);
+			device_printf(sc->dev,
+			    "DP modeset: framer re-arm video_active=true "
+			    "err=%d\n", verr);
+		} else {
+			device_printf(sc->dev,
+			    "DP modeset: rk_cdn_dp_set_video_active_first "
+			    "not resolved; framer not re-armed\n");
+		}
+
+		/*
+		 * Rebind the currently active DRM framebuffer after forcing
+		 * the VOP timings so the manual DP modeset path does not
+		 * leave scanout pointed at the boot framebuffer.
+		 */
+		fb = sc->crtc.fb;
+		if (fb != NULL) {
+			error = rk_drm_crtc_mode_set_base(&sc->crtc,
+			    sc->crtc.x, sc->crtc.y, NULL);
+			if (error != 0)
+				device_printf(sc->dev,
+				    "DP modeset: cannot restore active scanout: %d\n",
+				    -error);
+		}
+	}
+	return (error);
+}
+
+static int
+rk_drm_sysctl_output_select(SYSCTL_HANDLER_ARGS)
+{
+	struct rk_drm_softc *sc;
+	int error, val;
+
+	sc = arg1;
+	val = sc->output_select;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != RK_DRM_OUTPUT_AUTO && val != RK_DRM_OUTPUT_HDMI &&
+	    val != RK_DRM_OUTPUT_USBC_DP)
+		return (EINVAL);
+	sc->output_select = val;
+	if (val != RK_DRM_OUTPUT_USBC_DP)
+		sc->dp_autobring_done = false;
+	return (0);
+}
+
+/*
+ * rk_drm_sysctl_audio_dump
+ *
+ * Sysctl handler for `dev.rk_drm.<unit>.audio_dump`.  Writing 1 to
+ * the sysctl triggers a one-shot read-back of the HDMI audio block
+ * registers, with the result printed to dmesg via
+ * rk_drm_hw_audio_dump().  Reads return 0 with no side effect.  Any
+ * value other than 1 on write returns EINVAL so we do not overload
+ * the sysctl with future expansion semantics.
+ *
+ * Holds sc->hw_lock for the duration of the read so we do not race
+ * with a concurrent modeset that may be reprogramming the same
+ * registers.
+ */
+static int
+rk_drm_sysctl_audio_dump(SYSCTL_HANDLER_ARGS)
+{
+	struct rk_drm_softc *sc;
+	int error, val = 0;
+
+	sc = arg1;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != 1)
+		return (EINVAL);
+
+	mtx_lock(&sc->hw_lock);
+	rk_drm_hw_audio_dump(sc);
+	mtx_unlock(&sc->hw_lock);
+	return (0);
+}
+
+static int
+rk_drm_sysctl_vop_dump(SYSCTL_HANDLER_ARGS)
+{
+	struct rk_drm_softc *sc;
+	int error, val = 0;
+
+	sc = arg1;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != 1)
+		return (EINVAL);
+
+	mtx_lock(&sc->hw_lock);
+	rk_drm_hw_vop_dump(sc);
+	mtx_unlock(&sc->hw_lock);
+	return (0);
+}
+
+static int
+rk_drm_sysctl_fb_dump(SYSCTL_HANDLER_ARGS)
+{
+	struct rk_drm_softc *sc;
+	uint32_t *fb32, words_per_row, total_words, row_words, mid_row;
+	uint32_t row0[4], row1[4], row2[4], rowm[4];
+	vm_offset_t fb_va;
+	vm_paddr_t fb_pa;
+	size_t fb_size;
+	uint32_t stride;
+	const char *source;
+	int error, val = 0;
+
+	sc = arg1;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != 1)
+		return (EINVAL);
+
+	mtx_lock(&sc->hw_lock);
+	error = rk_drm_fb_get_active_mapping(sc, &fb_va, &fb_pa, &fb_size,
+	    &stride, &source);
+	if (error != 0 || fb_va == 0 || fb_size < sizeof(uint32_t) ||
+	    stride == 0) {
+		device_printf(sc->dev,
+		    "fb_dump: framebuffer not ready err=%d va=0x%jx pa=0x%jx size=%zu stride=%u\n",
+		    error, (uintmax_t)fb_va, (uintmax_t)fb_pa, fb_size, stride);
+		mtx_unlock(&sc->hw_lock);
+		return (0);
+	}
+
+	fb32 = (uint32_t *)fb_va;
+	total_words = fb_size / sizeof(uint32_t);
+	words_per_row = stride / sizeof(uint32_t);
+	if (words_per_row == 0)
+		words_per_row = 1;
+	row_words = MIN(words_per_row, 4);
+	mid_row = (words_per_row == 0) ? 0 :
+	    MIN((RK_DRM_DEFAULT_HEIGHT / 2) * words_per_row, total_words - 1);
+
+	for (uint32_t i = 0; i < 4; i++) {
+		row0[i] = (i < row_words && i < total_words) ? fb32[i] : 0;
+		row1[i] = (i < row_words &&
+		    words_per_row + i < total_words) ? fb32[words_per_row + i] : 0;
+		row2[i] = (i < row_words &&
+		    (2 * words_per_row) + i < total_words) ?
+		    fb32[(2 * words_per_row) + i] : 0;
+		rowm[i] = (i < row_words &&
+		    mid_row + i < total_words) ? fb32[mid_row + i] : 0;
+	}
+
+	device_printf(sc->dev,
+	    "fb_dump: source=%s va=0x%jx pa=0x%jx size=%zu stride=%u words_per_row=%u total_words=%u boot_color=0x%08x\n",
+	    source, (uintmax_t)fb_va, (uintmax_t)fb_pa, fb_size, stride,
+	    words_per_row, total_words, RK_DRM_FB_BOOT_COLOR);
+	device_printf(sc->dev,
+	    "fb_dump: row0=%08x %08x %08x %08x\n",
+	    row0[0], row0[1], row0[2], row0[3]);
+	device_printf(sc->dev,
+	    "fb_dump: row1=%08x %08x %08x %08x\n",
+	    row1[0], row1[1], row1[2], row1[3]);
+	device_printf(sc->dev,
+	    "fb_dump: row2=%08x %08x %08x %08x\n",
+	    row2[0], row2[1], row2[2], row2[3]);
+	device_printf(sc->dev,
+	    "fb_dump: mid =%08x %08x %08x %08x\n",
+	    rowm[0], rowm[1], rowm[2], rowm[3]);
+	mtx_unlock(&sc->hw_lock);
+	return (0);
+}
+
+static int
+rk_drm_sysctl_fb_fill(SYSCTL_HANDLER_ARGS)
+{
+	struct rk_drm_softc *sc;
+	uint32_t *fb32;
+	uint32_t color;
+	size_t i, words, fb_size;
+	vm_offset_t fb_va;
+	vm_paddr_t fb_pa;
+	uint32_t stride;
+	const char *source;
+	int error, val;
+
+	sc = arg1;
+	val = 0;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+
+	color = (val == 0) ? RK_DRM_FB_BOOT_COLOR : (uint32_t)val;
+	mtx_lock(&sc->hw_lock);
+	error = rk_drm_fb_get_active_mapping(sc, &fb_va, &fb_pa, &fb_size,
+	    &stride, &source);
+	mtx_unlock(&sc->hw_lock);
+	if (error != 0 || fb_va == 0 || fb_size < sizeof(uint32_t))
+		return (error != 0 ? error : ENXIO);
+
+	fb32 = (uint32_t *)fb_va;
+	words = fb_size / sizeof(uint32_t);
+	for (i = 0; i < words; i++)
+		fb32[i] = color;
+
+	if (sc->fb_dma_tag != NULL && sc->fb_dma_map != NULL)
+		bus_dmamap_sync(sc->fb_dma_tag, sc->fb_dma_map,
+		    BUS_DMASYNC_PREWRITE);
+
+	device_printf(sc->dev,
+	    "fb_fill: source=%s filled %zu words with 0x%08x at pa=0x%jx stride=%u\n",
+	    source, words, color, (uintmax_t)fb_pa, stride);
+	return (0);
+}
+
+static int
+rk_drm_fb_get_active_mapping(struct rk_drm_softc *sc, vm_offset_t *va,
+    vm_paddr_t *pa, size_t *size, uint32_t *stride, const char **source)
+{
+	struct drm_framebuffer *drm_fb;
+	struct rk_drm_fb *fb;
+	struct rk_drm_bo *bo;
+
+	*va = 0;
+	*pa = 0;
+	*size = 0;
+	*stride = 0;
+	*source = "none";
+
+	drm_fb = sc->crtc.fb;
+	if (drm_fb == NULL && sc->fbdev != NULL)
+		drm_fb = &sc->fbdev->drm_fb;
+	if (drm_fb == NULL)
+		return (ENXIO);
+
+	if (sc->fbdev != NULL && drm_fb == &sc->fbdev->drm_fb) {
+		*va = sc->fb_va;
+		*pa = sc->fb_pa;
+		*size = sc->fb_size;
+		*stride = drm_fb->pitches[0];
+		*source = "boot-fbdev";
+		return (0);
+	}
+
+	fb = container_of(drm_fb, struct rk_drm_fb, drm_fb);
+	if (fb->nplanes < 1 || fb->planes[0] == NULL)
+		return (ENXIO);
+	bo = fb->planes[0];
+	*va = bo->vbase;
+	*pa = bo->pbase;
+	*size = bo->gem_obj.size;
+	*stride = fb->drm_fb.pitches[0];
+	*source = "gem";
+	return (0);
+}
+
+/*
+ * rk_drm_sysctl_audio_i2s_probe
+ *
+ * Sysctl handler for `dev.rk_drm.<unit>.audio_i2s_probe`.  Stage 2
+ * reconnaissance: writing 1 transiently maps the I2S2 controller and
+ * reads its register file to determine whether the block is reachable
+ * (clock gates ungated) or dormant.  Output goes to dmesg.
+ *
+ * No locking required — the probe touches I2S2 registers only, not
+ * shared rk_drm state.  Used to decide whether subsequent Stage 2
+ * code needs to do CRU work or can program I2S2 directly.
+ */
+static int
+rk_drm_sysctl_audio_i2s_probe(SYSCTL_HANDLER_ARGS)
+{
+	struct rk_drm_softc *sc;
+	int error, val = 0;
+
+	sc = arg1;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != 1)
+		return (EINVAL);
+
+	rk_drm_hw_audio_i2s_probe(sc);
+	return (0);
+}
+
+/*
+ * rk_drm_sysctl_audio_refill
+ *
+ * Sysctl handler for `dev.rk_drm.<unit>.audio_refill`.  Writing 1
+ * begins continuous-silence refill of I2S2 (a callout reseeds the TX
+ * FIFO with zeros every 500us so the HDMI TX gets a stable BCLK /
+ * LRCK / SDATA stream forever).  Writing 0 stops the callout and
+ * clears XFER.  Reads return the current running state.
+ *
+ * Used to give the HDMI sink stable audio frames so it can detect
+ * audio activity without us needing a full PCM source path.
+ */
+static int
+rk_drm_sysctl_audio_refill(SYSCTL_HANDLER_ARGS)
+{
+	struct rk_drm_softc *sc;
+	int error, val;
+
+	sc = arg1;
+	val = sc->audio_refill_running ? 1 : 0;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val == 1)
+		return (rk_drm_hw_audio_i2s_refill_start(sc));
+	if (val == 0) {
+		rk_drm_hw_audio_i2s_refill_stop(sc);
+		return (0);
+	}
+	return (EINVAL);
+}
+
+/*
+ * rk_drm_sysctl_audio_i2s_start
+ *
+ * Sysctl handler for `dev.rk_drm.<unit>.audio_i2s_start`.  Writing 1
+ * pre-seeds the I2S2 TX FIFO with zero samples and toggles XFER to
+ * begin clocking.  This drives the HDMI TX's audio input with real
+ * BCLK / LRCK / SDATA for ~666 us (one FIFO depth at 48 kHz stereo
+ * 16-bit) so the sink observes audio activity.  After the brief
+ * burst the FIFO underruns and clocks stop — sustained playback is
+ * out of scope and requires DMA refill.
+ *
+ * No locking required — touches I2S2 registers only.
+ */
+static int
+rk_drm_sysctl_audio_i2s_start(SYSCTL_HANDLER_ARGS)
+{
+	struct rk_drm_softc *sc;
+	int error, val = 0;
+
+	sc = arg1;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error != 0 || req->newptr == NULL)
+		return (error);
+	if (val != 1)
+		return (EINVAL);
+
+	rk_drm_hw_audio_i2s_start(sc);
+	return (0);
+}
+
+/*
+ * --- Locked-state wrappers ---------------------------------------
+ *
+ * Below this point are a series of small functions that all share
+ * the same shape: take sc->hw_lock, read or update one piece of
+ * softc state (or call a non-locked HW routine), release the lock.
+ *
+ * They exist so the rest of the driver -- which often runs in
+ * non-locked contexts (DRM callbacks, sysctl handlers, vblank
+ * tasks) -- doesn't have to remember which fields require sc->hw_lock
+ * and which don't.  The "*_locked" suffix means "I take the lock for
+ * you", NOT "you must hold the lock when calling me".
+ */
+
+/* Disable scanout while holding hw_lock. */
 static void
 rk_drm_hw_disable_locked(struct rk_drm_softc *sc)
 {
@@ -185,6 +1228,7 @@ rk_drm_hw_disable_locked(struct rk_drm_softc *sc)
 	mtx_unlock(&sc->hw_lock);
 }
 
+/* Re-point VOP scanout at a new framebuffer DMA address + stride. */
 static int
 rk_drm_hw_set_scanout_locked(struct rk_drm_softc *sc, vm_paddr_t paddr,
     uint32_t stride)
@@ -198,7 +1242,7 @@ rk_drm_hw_set_scanout_locked(struct rk_drm_softc *sc, vm_paddr_t paddr,
 }
 
 static bool
-rk_drm_hw_hpd_locked(struct rk_drm_softc *sc)
+rk_drm_hdmi_hpd_locked(struct rk_drm_softc *sc)
 {
 	bool hpd;
 
@@ -208,6 +1252,49 @@ rk_drm_hw_hpd_locked(struct rk_drm_softc *sc)
 	return (hpd);
 }
 
+static int
+rk_drm_output_route_locked(struct rk_drm_softc *sc)
+{
+	bool hdmi, dp;
+
+	hdmi = rk_drm_hdmi_hpd_locked(sc);
+	dp = rk_drm_dp_altmode_connected();
+
+	switch (sc->output_select) {
+	case RK_DRM_OUTPUT_HDMI:
+		return (RK_DRM_OUTPUT_HDMI);
+	case RK_DRM_OUTPUT_USBC_DP:
+		return (RK_DRM_OUTPUT_USBC_DP);
+	case RK_DRM_OUTPUT_AUTO:
+	default:
+		if (dp)
+			return (RK_DRM_OUTPUT_USBC_DP);
+		if (hdmi)
+			return (RK_DRM_OUTPUT_HDMI);
+		return (RK_DRM_OUTPUT_USBC_DP);
+	}
+}
+
+/* Sample sink presence under hw_lock. HDMI HPD OR active USB-C DP altmode. */
+static bool
+rk_drm_hw_hpd_locked(struct rk_drm_softc *sc)
+{
+	bool hdmi, dp;
+
+	hdmi = rk_drm_hdmi_hpd_locked(sc);
+	dp = rk_drm_dp_altmode_connected();
+	switch (sc->output_select) {
+	case RK_DRM_OUTPUT_HDMI:
+		return (hdmi);
+	case RK_DRM_OUTPUT_USBC_DP:
+		return (dp);
+	case RK_DRM_OUTPUT_AUTO:
+	default:
+		return (hdmi || dp);
+	}
+}
+
+/* Read sc->output_enabled atomically (just a flag, but lock for memory order). */
 static bool
 rk_drm_output_enabled_locked(struct rk_drm_softc *sc)
 {
@@ -219,6 +1306,11 @@ rk_drm_output_enabled_locked(struct rk_drm_softc *sc)
 	return (enabled);
 }
 
+/*
+ * Snapshot the three HPD state fields atomically so the caller sees
+ * a coherent view (e.g., not "valid && last_status" while squelch
+ * just changed underneath them).  Any of the out-pointers may be NULL.
+ */
 static void
 rk_drm_hpd_state_locked(struct rk_drm_softc *sc, bool *valid, bool *last_status,
     bool *squelch)
@@ -233,6 +1325,7 @@ rk_drm_hpd_state_locked(struct rk_drm_softc *sc, bool *valid, bool *last_status,
 	mtx_unlock(&sc->hw_lock);
 }
 
+/* Atomic 3-tuple HPD state update -- mirror image of hpd_state_locked. */
 static void
 rk_drm_hpd_update_locked(struct rk_drm_softc *sc, bool valid, bool last_status,
     bool squelch)
@@ -244,6 +1337,7 @@ rk_drm_hpd_update_locked(struct rk_drm_softc *sc, bool valid, bool last_status,
 	mtx_unlock(&sc->hw_lock);
 }
 
+/* Toggle HPD squelch (used to suppress events during deliberate disable). */
 static void
 rk_drm_hpd_set_squelch_locked(struct rk_drm_softc *sc, bool squelch)
 {
@@ -252,6 +1346,7 @@ rk_drm_hpd_set_squelch_locked(struct rk_drm_softc *sc, bool squelch)
 	mtx_unlock(&sc->hw_lock);
 }
 
+/* True if the HPD poll task is currently scheduled. */
 static bool
 rk_drm_hpd_task_running_locked(struct rk_drm_softc *sc)
 {
@@ -263,6 +1358,7 @@ rk_drm_hpd_task_running_locked(struct rk_drm_softc *sc)
 	return (running);
 }
 
+/* True if the vblank emulation task is currently scheduled. */
 static bool
 rk_drm_vblank_task_running_locked(struct rk_drm_softc *sc)
 {
@@ -274,6 +1370,11 @@ rk_drm_vblank_task_running_locked(struct rk_drm_softc *sc)
 	return (running);
 }
 
+/*
+ * Test-and-set: arm the vblank task if it isn't already.  Returns
+ * true if the caller should actually enqueue (we transitioned
+ * 0 -> 1), false if it was already running (idempotent enable).
+ */
 static bool
 rk_drm_vblank_enable_locked(struct rk_drm_softc *sc)
 {
@@ -286,6 +1387,7 @@ rk_drm_vblank_enable_locked(struct rk_drm_softc *sc)
 	return (start);
 }
 
+/* Mark the vblank task as no longer scheduled. */
 static void
 rk_drm_vblank_disable_locked(struct rk_drm_softc *sc)
 {
@@ -294,6 +1396,7 @@ rk_drm_vblank_disable_locked(struct rk_drm_softc *sc)
 	mtx_unlock(&sc->hw_lock);
 }
 
+/* Initialize HPD task state at the start of polling. */
 static void
 rk_drm_hpd_start_locked(struct rk_drm_softc *sc, bool initial_hpd)
 {
@@ -305,6 +1408,7 @@ rk_drm_hpd_start_locked(struct rk_drm_softc *sc, bool initial_hpd)
 	mtx_unlock(&sc->hw_lock);
 }
 
+/* Mark the HPD task as no longer scheduled (does not cancel the callout). */
 static void
 rk_drm_hpd_stop_locked(struct rk_drm_softc *sc)
 {
@@ -313,6 +1417,7 @@ rk_drm_hpd_stop_locked(struct rk_drm_softc *sc)
 	mtx_unlock(&sc->hw_lock);
 }
 
+/* Cancel a pending page flip, freeing its event and dropping vblank ref. */
 static void
 rk_drm_cancel_page_flip(struct rk_drm_softc *sc, struct drm_file *file_priv)
 {
@@ -351,6 +1456,7 @@ rk_drm_cancel_page_flip(struct rk_drm_softc *sc, struct drm_file *file_priv)
 	drm_vblank_put(&sc->drm_dev, pipe);
 }
 
+/* Periodic taskqueue body that emulates vblank: handles pending flips, fires events, reschedules. */
 static void
 rk_drm_vblank_task(void *arg, int pending)
 {
@@ -386,6 +1492,13 @@ rk_drm_vblank_task(void *arg, int pending)
 
 	if (new_fb != NULL) {
 		error = rk_drm_fb_get_paddr_stride(sc, new_fb, &paddr, &stride);
+		if (error == 0) {
+			device_printf(sc->dev,
+			    "vblank flip: fb=%p paddr=0x%jx stride=%u (%s)\n",
+			    new_fb, (uintmax_t)paddr, stride,
+			    (sc->fbdev != NULL && new_fb == &sc->fbdev->drm_fb) ?
+			    "boot-fbdev" : "gem");
+		}
 		if (error == 0)
 			error = rk_drm_hw_set_scanout_locked(sc, paddr, stride);
 		if (error == 0)
@@ -424,6 +1537,7 @@ rk_drm_vblank_task(void *arg, int pending)
 		    sc->vblank_ticks);
 }
 
+/* DRM framebuffer .destroy hook for the boot-time "fixed" fb (no GEM ref). */
 static void
 rk_drm_fixedfb_destroy(struct drm_framebuffer *drm_fb)
 {
@@ -431,6 +1545,7 @@ rk_drm_fixedfb_destroy(struct drm_framebuffer *drm_fb)
 	drm_framebuffer_cleanup(drm_fb);
 }
 
+/* No userland export for the fixed fb -- always returns -ENODEV. */
 static int
 rk_drm_fixedfb_create_handle(struct drm_framebuffer *drm_fb,
     struct drm_file *file_priv, unsigned int *handle)
@@ -446,6 +1561,7 @@ static const struct drm_framebuffer_funcs rk_drm_fixedfb_funcs = {
 	.create_handle = rk_drm_fixedfb_create_handle,
 };
 
+/* Initialize the boot fb's drm_framebuffer struct in-place (no GEM backing). */
 static int
 rk_drm_fixedfb_alloc(struct drm_device *drm_dev,
     struct drm_mode_fb_cmd2 *mode_cmd, struct rk_drm_fbdev *fbdev)
@@ -816,7 +1932,7 @@ rk_drm_fb_get_paddr_stride(struct rk_drm_softc *sc,
 		return (ENXIO);
 	if (sc->fbdev != NULL && drm_fb == &sc->fbdev->drm_fb) {
 		*paddr = sc->fb_pa;
-		*stride = sc->stride;
+		*stride = drm_fb->pitches[0];
 		return (0);
 	}
 
@@ -837,6 +1953,7 @@ rk_drm_fb_probe(struct drm_fb_helper *helper,
 	struct rk_drm_fbdev *fbdev;
 	struct drm_mode_fb_cmd2 mode_cmd;
 	struct fb_info *info;
+	uint32_t fb_width, fb_height;
 	int error;
 
 	if (helper->fb != NULL)
@@ -851,10 +1968,11 @@ rk_drm_fb_probe(struct drm_fb_helper *helper,
 	if (info == NULL)
 		return (-ENOMEM);
 
+	rk_drm_fb_target_size(&fb_width, &fb_height);
 	memset(&mode_cmd, 0, sizeof(mode_cmd));
-	mode_cmd.width = sizes->surface_width;
-	mode_cmd.height = sizes->surface_height;
-	mode_cmd.pitches[0] = sc->stride;
+	mode_cmd.width = fb_width;
+	mode_cmd.height = fb_height;
+	mode_cmd.pitches[0] = rk_drm_fb_pitch_bytes(fb_width);
 	mode_cmd.pixel_format = drm_mode_legacy_fb_format(
 	    sizes->surface_bpp, sizes->surface_depth);
 
@@ -875,8 +1993,11 @@ rk_drm_fb_probe(struct drm_fb_helper *helper,
 	info->fb_memattr = VM_MEMATTR_UNCACHEABLE;
 	drm_fb_helper_fill_fix(info, fbdev->drm_fb.pitches[0],
 	    fbdev->drm_fb.depth);
-	drm_fb_helper_fill_var(info, helper, fbdev->drm_fb.width,
-	    fbdev->drm_fb.height);
+	drm_fb_helper_fill_var(info, helper, fb_width, fb_height);
+	device_printf(sc->dev,
+	    "fbdev probe: helper requested %ux%u, using %ux%u stride=%u alloc_stride=%u\n",
+	    sizes->surface_width, sizes->surface_height, fb_width, fb_height,
+	    mode_cmd.pitches[0], sc->stride);
 
 	return (1);
 }
@@ -1073,13 +2194,59 @@ rk_drm_crtc_mode_set(struct drm_crtc *crtc, struct drm_display_mode *mode,
 {
 	struct rk_drm_softc *sc;
 	const struct drm_display_mode *active_mode;
+	int (*cdn_enable_mode)(uint32_t, uint16_t, uint16_t, uint16_t, uint16_t,
+	    uint16_t, uint16_t, uint16_t, uint16_t, uint32_t);
 	int error;
 
 	sc = device_get_softc(crtc->dev->dev);
 	active_mode = adjusted_mode != NULL ? adjusted_mode : mode;
+	if (rk_drm_output_route_locked(sc) == RK_DRM_OUTPUT_USBC_DP) {
+		struct drm_display_mode forced;
+
+		/*
+		 * USB-C DP override.  DRM may have picked any timing from
+		 * the EDID-derived connector mode list (or our forced mode if
+		 * it happens to match by hdisplay/vdisplay/pclk).  For
+		 * investigation, IGNORE DRM's choice and always drive the
+		 * exact values from rk_dp_forced_mode.h — this guarantees
+		 * VOP + cdn-dp framer both see the same custom timing without
+		 * needing to inject our mode into DRM's connector mode list.
+		 */
+		rk_drm_fill_forced_dp_mode(&forced);
+		active_mode = &forced;
+		if (adjusted_mode != NULL)
+			*adjusted_mode = forced;
+
+		cdn_enable_mode = rk_drm_lookup_cdn_enable_mode();
+		if (cdn_enable_mode == NULL)
+			return (-ENXIO);
+		error = cdn_enable_mode(active_mode->clock, active_mode->hdisplay,
+		    active_mode->hsync_start, active_mode->hsync_end,
+		    active_mode->htotal, active_mode->vdisplay,
+		    active_mode->vsync_start, active_mode->vsync_end,
+		    active_mode->vtotal, active_mode->flags);
+		if (error != 0) {
+			device_printf(sc->dev,
+			    "Cannot prepare USB-C DP encoder path: %d\n", error);
+			return (-error);
+		}
+	}
 	error = rk_drm_hw_modeset_locked(sc, active_mode);
 	if (error != 0)
 		return (-error);
+	if (rk_drm_output_route_locked(sc) == RK_DRM_OUTPUT_USBC_DP) {
+		int (*set_video_active)(bool);
+
+		set_video_active = rk_drm_lookup_set_video_active();
+		if (set_video_active != NULL) {
+			error = set_video_active(true);
+			device_printf(sc->dev,
+			    "DP modeset: framer re-arm video_active=true err=%d\n",
+			    error);
+			if (error != 0)
+				return (-error);
+		}
+	}
 	sc->vblank_ticks = rk_drm_vblank_ticks_from_mode(active_mode);
 	if (crtc->fb == NULL)
 		return (0);
@@ -1330,6 +2497,7 @@ rk_drm_hpd_task(void *arg, int pending)
 {
 	struct rk_drm_softc *sc;
 	bool hpd, changed, valid, squelch, last_status;
+	uint8_t raw_edid[256];
 
 	(void)pending;
 
@@ -1343,6 +2511,89 @@ rk_drm_hpd_task(void *arg, int pending)
 	rk_drm_hpd_update_locked(sc, true, hpd, squelch);
 	if (changed)
 		drm_helper_hpd_irq_event(&sc->drm_dev);
+	if (!hpd || sc->output_select != RK_DRM_OUTPUT_USBC_DP) {
+		sc->dp_hotplug_reprobe_done = false;
+	} else if (sc->fbdev != NULL &&
+	    rk_drm_mode_is_usbc_fallback(&sc->crtc.hwmode) &&
+	    rk_drm_dp_cached_edid(raw_edid, sizeof(raw_edid))) {
+		if (!sc->dp_hotplug_reprobe_done) {
+			device_printf(sc->dev,
+			    "USB-C DP: cached EDID ready after fallback modeset; "
+			    "triggering fb-helper reprobe\n");
+		}
+		drm_fb_helper_hotplug_event(&sc->fbdev->fb_helper);
+		/*
+		 * Keep retrying while we remain in the safe fallback mode.
+		 * fb-helper may defer the runtime hotplug reprobe until the
+		 * current fb/CRTC bindings settle.
+		 */
+		sc->dp_hotplug_reprobe_done =
+		    !rk_drm_mode_is_usbc_fallback(&sc->crtc.hwmode);
+	} else if (!rk_drm_mode_is_usbc_fallback(&sc->crtc.hwmode)) {
+		sc->dp_hotplug_reprobe_done = true;
+	}
+	/*
+	 * Sink-driven link maintenance.
+	 *
+	 * When a DP sink detects symbol errors or interlane skew on the
+	 * already-trained link (BER above its internal threshold), it asks
+	 * the source to retrain by:
+	 *
+	 *   1. Setting DPCD 0x204 bit 7 (LINK_STATUS_UPDATED).
+	 *   2. Asserting HPD_IRQ — for USB-C DP altmode this arrives as a
+	 *      VDM ATTENTION from the partner with bit 3 of dp_status set
+	 *      (the 0x08 in the familiar 0x8a value).
+	 *
+	 * the reference driver dispatches the retrain from cdn_dp_pd_event_work.  We're
+	 * polled (hpd_task runs every hz on taskqueue_thread), so we sample
+	 * fusb302's cached dp_status and react on the rising edge of
+	 * HPD_IRQ — that one edge per request, rather than retraining every
+	 * hz until the partner clears the bit.  Detection latency is up to
+	 * one second.  The retrain helper itself reruns CR+EQ only; firmware
+	 * and framer state stay live, so the wall-clock cost is comparable
+	 * to a normal link-train cycle (~50-200ms at HBR).
+	 *
+	 * Gates:
+	 *   - hpd == true: don't retrain if the cable is unplugged.
+	 *   - output_select == USBC_DP: HDMI / eDP paths have their own logic.
+	 *   - dp_autobring_done: the link must have completed initial bring-up;
+	 *     retraining a never-trained link goes nowhere good.
+	 */
+	if (hpd && sc->output_select == RK_DRM_OUTPUT_USBC_DP &&
+	    sc->dp_autobring_done) {
+		int (*get_status)(device_t,
+		    struct rk3399_typec_dp_altmode_status *);
+		struct rk3399_typec_dp_altmode_status astat;
+		devclass_t fdc = devclass_find("fusb302");
+		device_t fdev = fdc != NULL ? devclass_get_device(fdc, 0) : NULL;
+
+		get_status = rk_drm_lookup_dp_altmode_status();
+		if (fdev != NULL && get_status != NULL &&
+		    get_status(fdev, &astat) == 0 && astat.valid) {
+			uint32_t cur = astat.dp_status;
+			uint32_t prev = sc->dp_last_altmode_status;
+			bool hpd_irq_now = (cur & 0x08) != 0;
+			bool hpd_irq_prev = (prev & 0x08) != 0;
+			/*
+			 * Rising edge: HPD_IRQ newly asserted, or asserted and
+			 * dp_status changed (fresh ATTENTION carrying a new
+			 * IRQ event the sink wants serviced).
+			 */
+			if (hpd_irq_now && (!hpd_irq_prev || cur != prev)) {
+				int (*cdn_retrain)(void);
+
+				cdn_retrain = rk_drm_lookup_cdn_retrain();
+				if (cdn_retrain != NULL) {
+					int err = cdn_retrain();
+					device_printf(sc->dev,
+					    "HPD_IRQ retrain: "
+					    "dp_status 0x%x->0x%x err=%d\n",
+					    prev, cur, err);
+				}
+			}
+			sc->dp_last_altmode_status = cur;
+		}
+	}
 	if (rk_drm_hpd_task_running_locked(sc))
 		taskqueue_enqueue_timeout(taskqueue_thread, &sc->hpd_task, hz);
 }
@@ -1368,12 +2619,15 @@ rk_drm_connector_add_fixed_mode(struct drm_connector *connector)
 static int
 rk_drm_connector_get_modes(struct drm_connector *connector)
 {
+	struct rk_drm_softc *sc;
 	struct edid *edid;
 	device_t ddc_dev;
 	phandle_t node;
 	pcell_t xref;
 	int count;
+	uint8_t raw_edid[256];
 
+	sc = device_get_softc(connector->dev->dev);
 	edid = NULL;
 	ddc_dev = NULL;
 	node = OF_finddevice("/hdmi@ff940000");
@@ -1390,6 +2644,17 @@ rk_drm_connector_get_modes(struct drm_connector *connector)
 	if (edid != NULL) {
 		drm_mode_connector_update_edid_property(connector, edid);
 		count = drm_add_edid_modes(connector, edid);
+		rk_drm_prefer_usbc_dp_mode(sc, connector);
+		drm_edid_to_eld(connector, edid);
+		if (count > 0)
+			return (count);
+	}
+
+	if (rk_drm_dp_cached_edid(raw_edid, sizeof(raw_edid))) {
+		edid = (struct edid *)raw_edid;
+		drm_mode_connector_update_edid_property(connector, edid);
+		count = drm_add_edid_modes(connector, edid);
+		rk_drm_prefer_usbc_dp_mode(sc, connector);
 		drm_edid_to_eld(connector, edid);
 		if (count > 0)
 			return (count);
@@ -1557,6 +2822,7 @@ rk_drm_drm_load(struct drm_device *drm_dev, unsigned long flags)
 	    rk_drm_vblank_task, sc);
 	TIMEOUT_TASK_INIT(taskqueue_thread, &sc->hpd_task, 0, rk_drm_hpd_task,
 	    sc);
+	callout_init(&sc->audio_refill_co, 1);
 	rk_drm_hpd_start_locked(sc, rk_drm_hw_hpd_locked(sc));
 	taskqueue_enqueue_timeout(taskqueue_thread, &sc->hpd_task, hz);
 	return (0);
@@ -1630,6 +2896,11 @@ rk_drm_attach(device_t dev)
 	sc = device_get_softc(dev);
 	bzero(sc, sizeof(*sc));
 	sc->dev = dev;
+	sc->output_select = rk_drm_output_default;
+	if (sc->output_select != RK_DRM_OUTPUT_AUTO &&
+	    sc->output_select != RK_DRM_OUTPUT_HDMI &&
+	    sc->output_select != RK_DRM_OUTPUT_USBC_DP)
+		sc->output_select = RK_DRM_OUTPUT_USBC_DP;
 	mtx_init(&sc->hw_lock, "rk_drm hw", NULL, MTX_DEF);
 
 	error = rk_drm_hw_attach(sc);
@@ -1654,6 +2925,71 @@ rk_drm_attach(device_t dev)
 	sc->drm_registered = true;
 	device_printf(dev, "registered DRM device with EDID-bounded modeset\n");
 
+	{
+		struct sysctl_ctx_list *ctx = device_get_sysctl_ctx(dev);
+		struct sysctl_oid *tree = device_get_sysctl_tree(dev);
+
+		SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+		    "output_select",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, rk_drm_sysctl_output_select, "I",
+		    "Display output selection: 0=auto 1=hdmi 2=usb-c-dp");
+
+		SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+		    "hdmi_modeset_now",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, rk_drm_sysctl_hdmi_modeset_now, "I",
+		    "Write 1 to drive the HDMI path with 1080p60 and select HDMI");
+
+		SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+		    "dp_modeset_now",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, rk_drm_sysctl_dp_modeset_now, "I",
+		    "Write 1 to drive VOP -> eDP path with 1080p60 and select USB-C DP (run rk_cdn_dp stages 1..19 first)");
+
+		SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+		    "audio_dump",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, rk_drm_sysctl_audio_dump, "I",
+		    "Write 1 to dump HDMI audio register state to dmesg");
+
+		SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+		    "vop_dump",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, rk_drm_sysctl_vop_dump, "I",
+		    "Write 1 to dump VOP B register state to dmesg");
+
+		SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+		    "fb_dump",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, rk_drm_sysctl_fb_dump, "I",
+		    "Write 1 to dump sampled framebuffer contents to dmesg");
+
+		SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+		    "fb_fill",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, rk_drm_sysctl_fb_fill, "I",
+		    "Write 0 for boot color or a 32-bit ARGB value to fill the active framebuffer");
+
+		SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+		    "audio_i2s_probe",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, rk_drm_sysctl_audio_i2s_probe, "I",
+		    "Write 1 to probe I2S2 (HDMI audio source) register state");
+
+		SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+		    "audio_i2s_start",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, rk_drm_sysctl_audio_i2s_start, "I",
+		    "Write 1 to seed I2S2 FIFO and start TX (brief silence burst)");
+
+		SYSCTL_ADD_PROC(ctx, SYSCTL_CHILDREN(tree), OID_AUTO,
+		    "audio_refill",
+		    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_MPSAFE,
+		    sc, 0, rk_drm_sysctl_audio_refill, "I",
+		    "Write 1 to start continuous I2S2 silence refill, 0 to stop");
+	}
+
 	return (0);
 }
 
@@ -1667,6 +3003,7 @@ rk_drm_detach(device_t dev)
 		drm_put_dev(&sc->drm_dev);
 		sc->drm_registered = false;
 	}
+	rk_drm_hw_audio_i2s_refill_stop(sc);
 	rk_drm_hw_detach(sc);
 	mtx_destroy(&sc->hw_lock);
 	return (0);

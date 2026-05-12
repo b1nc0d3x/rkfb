@@ -23,11 +23,23 @@
 
 #include "rk_drm.h"
 
+#ifndef DRM_MODE_FLAG_PPIXDATA
+#define	DRM_MODE_FLAG_PPIXDATA	0
+#endif
+
 #define HDMI_PHY_I2C_ADDR  0x69
 
 #define RK_DRM_SYS_GRF_GPIO4C_IOMUX 0x0e028
+#define RK_DRM_SYS_GRF_SOC_CON9     0x6224
 #define RK_DRM_SYS_GRF_SOC_CON20    0x6250
 #define RK_DRM_GRF_HDMI_LCDC_SEL    (1u << 6)
+#define RK_DRM_GRF_EDP_LCDC_SEL     (1u << 5)
+/*
+ * SOC_CON9[12] = DP_SEL_VOP_LIT: 0 = route VOP_BIG to Cadence MHDP
+ * (the USB-C DP encoder), 1 = route VOP_LITTLE.  Distinct from
+ * SOC_CON20[5] which muxes the Analogix eDP encoder.
+ */
+#define RK_DRM_GRF_DP_SEL_VOP_LIT   (1u << 12)
 #define RK_DRM_GRF_GPIO4C_I2C3HDMI  0x003f0005u
 
 #define RK_DRM_VOP_DSP_HTOTAL_HS_END 0x0188
@@ -45,15 +57,32 @@
 #define RK_DRM_VOP_SYS_CTRL_MIPI_EN    (1u << 15)
 #define RK_DRM_VOP_SYS_CTRL_MIPI_DUAL  (1u << 3)
 #define RK_DRM_VOP_DSP_OUT_MODE_MASK 0x0000000fu
-#define RK_DRM_VOP_DSP_OUT_MODE_AAAA 0x0000000fu
+#define RK_DRM_VOP_DSP_OUT_MODE_P888 0x00000000u	/* RGB888 24bpp */
+#define RK_DRM_VOP_DSP_OUT_MODE_AAAA 0x0000000fu	/* RGB+alpha 30bpp */
+#define RK_DRM_VOP_DSP_CTRL0_PIN_POL_MASK   (0x7u << 4)
+#define RK_DRM_VOP_DSP_CTRL0_DCLK_POL       (1u << 7)
+#define RK_DRM_VOP_DSP_CTRL0_P2I_EN         (1u << 5)
+#define RK_DRM_VOP_DSP_CTRL0_INTERLACE      (1u << 10)
+#define RK_DRM_VOP_DSP_CTRL1_DP_PIN_POL_MASK (0x7u << 16)
+#define RK_DRM_VOP_DSP_CTRL1_DP_DCLK_POL    (1u << 19)
 #define RK_DRM_VOP_DSP_CTRL1_HDMI_PIN_POL_MASK  (0x7u << 20)
 #define RK_DRM_VOP_DSP_CTRL1_HDMI_PIN_POL_POS   (0x3u << 20)
 #define RK_DRM_VOP_DSP_CTRL1_HDMI_DCLK_POL      (1u << 23)
 #define RK_DRM_VOP_WIN0_LB_MODE_RGB_1920X5 (4u << 5)
 #define RK_DRM_VOP_WIN0_DATA_FMT_XRGB8888 0x00000000u
-#define RK_DRM_VOP_WIN0_CTRL0_ENABLE  (RK_DRM_VOP_WIN0_LB_MODE_RGB_1920X5 | \
+/*
+ * Live read of working the reference build shows WIN0_CTRL0 = 0x3a000081 — lower 8 bits
+ * are enable+LB_MODE+fmt as before, but bits 25/27/28/29 in 0x3a000000 are
+ * also set (likely csc_en + color-space + ymir/yuv-clip default state).
+ * Mirror that so the scanout pipeline matches the working reference.
+ */
+#define RK_DRM_VOP_WIN0_CTRL0_UPPER 0x3a000000u
+#define RK_DRM_VOP_WIN0_CTRL0_ENABLE  (RK_DRM_VOP_WIN0_CTRL0_UPPER | \
+    RK_DRM_VOP_WIN0_LB_MODE_RGB_1920X5 | \
     RK_DRM_VOP_WIN0_DATA_FMT_XRGB8888 | 0x00000001u)
 #define RK_DRM_VOP_WIN0_CTRL2_PRIMARY 0x00000021u
+#define RK_DRM_VOP_WIN0_SRC_ALPHA_CTRL_OPAQUE 0x00ff0000u
+#define RK_DRM_VOP_WIN0_DST_ALPHA_CTRL_OPAQUE 0x00000000u
 
 #define RK_DRM_FB_DMA_LOWADDR_TEST    0x0fffffffu
 
@@ -153,6 +182,40 @@
 #define RK_DRM_HDMI_A_HDCPCFG1       0x5001
 #define RK_DRM_HDMI_A_VIDPOLCFG      0x5009
 #define RK_DRM_HDMI_PKT_SEND_CTL     0x0640
+/*
+ * Audio block registers (Designware HDMI TX, mirrors sys/dev/hdmi/dwc_hdmireg.h
+ * but uses our 4-byte-stride MMIO accessors).  Used by Stage 1 audio bring-up:
+ * configure CTS/N for 48 kHz, select I2S input, send Audio InfoFrame.  Does not
+ * yet drive PCM data; that requires the I2S source path to be wired up.
+ */
+#define RK_DRM_HDMI_FC_AUDICONF0     0x1025
+#define RK_DRM_HDMI_FC_AUDICONF1     0x1026
+#define RK_DRM_HDMI_FC_AUDICONF2     0x1027
+#define RK_DRM_HDMI_FC_AUDICONF3     0x1028
+#define RK_DRM_HDMI_FC_AUDSCONF      0x1063
+#define RK_DRM_HDMI_FC_AUDSV         0x1065
+#define RK_DRM_HDMI_AUD_CONF0        0x3100
+#define RK_DRM_HDMI_AUD_CONF1        0x3101
+#define RK_DRM_HDMI_AUD_N1           0x3200
+#define RK_DRM_HDMI_AUD_N2           0x3201
+#define RK_DRM_HDMI_AUD_N3           0x3202
+#define RK_DRM_HDMI_AUD_CTS3         0x3205
+#define RK_DRM_HDMI_AUD_INPUTCLKFS   0x3206
+
+#define RK_DRM_HDMI_AUD_CONF0_INTERFACE_IIS  0x20
+#define RK_DRM_HDMI_AUD_CONF0_I2SINEN_CH2    0x01
+#define RK_DRM_HDMI_AUD_CONF0_I2SINEN_MASK   0x0f
+#define RK_DRM_HDMI_AUD_CONF0_INTERFACE_MASK 0x20
+#define RK_DRM_HDMI_AUD_CONF1_DATAMODE_IIS   0x00
+#define RK_DRM_HDMI_AUD_CONF1_DATAMODE_MASK  0xe0
+#define RK_DRM_HDMI_AUD_CONF1_DATWIDTH_16BIT 0x10
+#define RK_DRM_HDMI_AUD_CONF1_DATWIDTH_MASK  0x1f
+#define RK_DRM_HDMI_AUD_CTS3_N_SHIFT_MASK    0xe0
+#define RK_DRM_HDMI_AUD_CTS3_CTS_MANUAL      0x10
+#define RK_DRM_HDMI_AUD_INPUTCLKFS_64        0x04
+#define RK_DRM_HDMI_MC_CLKDIS_AUDCLK_DISABLE (1u << 3)
+#define RK_DRM_HDMI_FC_AUDICONF0_CC_2CH      (1u << 4) /* CC=1 (2 channels) */
+#define RK_DRM_HDMI_FC_AUDSV_LR_VALID        0xee     /* L+R valid */
 
 #define RK_DRM_HDMI_PHY_CONF0_PDZ          (1u << 7)
 #define RK_DRM_HDMI_PHY_CONF0_ENTMDS       (1u << 6)
@@ -250,6 +313,7 @@ static const struct rk_drm_pll_rate rk_drm_pll_rates[] = {
 	{ 106500, 1, 71, 4, 4 },
 	{ 108000, 3, 54, 4, 1 },
 	{ 119000, 6, 119, 4, 1 },
+	{ 121750, 6, 487, 4, 4 },
 	{ 148500, 4, 99, 4, 1 },
 };
 
@@ -289,6 +353,12 @@ rk_drm_grf_write4(struct rk_drm_softc *sc, size_t off, uint32_t val)
 	bus_space_write_4(fdtbus_bs_tag, sc->grf_bsh, off, val);
 	bus_space_barrier(fdtbus_bs_tag, sc->grf_bsh, off, 4,
 	    BUS_SPACE_BARRIER_WRITE);
+}
+
+static inline uint32_t
+rk_drm_grf_read4(struct rk_drm_softc *sc, size_t off)
+{
+	return (bus_space_read_4(fdtbus_bs_tag, sc->grf_bsh, off));
 }
 
 static inline uint32_t
@@ -364,7 +434,7 @@ rk_drm_hdmi_write1_safe(struct rk_drm_softc *sc, size_t off, uint8_t val)
 	__asm volatile("msr daif, %0" :: "r"(daif));
 }
 
-static void
+void
 rk_drm_default_mode_fill(struct drm_display_mode *mode)
 {
 	memset(mode, 0, sizeof(*mode));
@@ -647,6 +717,25 @@ rk_drm_route_vop_to_hdmi(struct rk_drm_softc *sc)
 	    RK_DRM_GRF_GPIO4C_I2C3HDMI);
 }
 
+/*
+ * Route VOP B (the big VOP) to drive both DP encoders.
+ *  - SOC_CON20[5] = EDP_LCDC_SEL: 0 = VOP_BIG -> Analogix eDP
+ *  - SOC_CON20[6] = HDMI_LCDC_SEL: 1 = VOP_LIT -> HDMI (live the reference build has this set
+ *                   even though display is on DP — routes HDMI off VOP_BIG)
+ *  - SOC_CON9[12] = DP_SEL_VOP_LIT: 0 = VOP_BIG -> Cadence MHDP
+ * Hiword-update: low half = value, high half = bit-mask.
+ */
+static void
+rk_drm_route_vop_to_dp(struct rk_drm_softc *sc)
+{
+	rk_drm_grf_write4(sc, RK_DRM_SYS_GRF_SOC_CON20,
+	    (RK_DRM_GRF_EDP_LCDC_SEL << 16));
+	rk_drm_grf_write4(sc, RK_DRM_SYS_GRF_SOC_CON20,
+	    (RK_DRM_GRF_HDMI_LCDC_SEL << 16) | RK_DRM_GRF_HDMI_LCDC_SEL);
+	rk_drm_grf_write4(sc, RK_DRM_SYS_GRF_SOC_CON9,
+	    (RK_DRM_GRF_DP_SEL_VOP_LIT << 16));
+}
+
 static int
 rk_drm_program_vpll(struct rk_drm_softc *sc, uint32_t clock_khz)
 {
@@ -704,6 +793,48 @@ rk_drm_vop_pulse_dclk_reset(struct rk_drm_softc *sc)
 }
 
 static void
+rk_drm_vop_program_win0_opaque(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode, uint32_t hact_start,
+    uint32_t vact_start)
+{
+	uint32_t stride_bytes, stride_words;
+
+	/*
+	 * The fixed boot framebuffer is allocated at the maximum 1920-wide
+	 * pitch, but the direct modeset path programs WIN0 before KMS has a
+	 * chance to rebind a GEM framebuffer with its own pitch.  the reference driver sets
+	 * yrgb_vir from the actual visible buffer pitch, so mirror that here
+	 * instead of reusing the allocation pitch.
+	 */
+	stride_bytes = roundup2(mode->hdisplay, 16) * (RK_DRM_BPP / 8);
+	stride_words = stride_bytes / 4;
+
+	rk_drm_vop_write4(sc, 0x0038, 0x00000000);
+	rk_drm_vop_write4(sc, 0x003c, stride_words);
+	rk_drm_vop_write4(sc, 0x0040, (uint32_t)sc->fb_pa);
+	rk_drm_vop_write4(sc, 0x0048,
+	    (((uint32_t)mode->vdisplay - 1) << 16) |
+	    ((uint32_t)mode->hdisplay - 1));
+	rk_drm_vop_write4(sc, 0x004c,
+	    (((uint32_t)mode->vdisplay - 1) << 16) |
+	    ((uint32_t)mode->hdisplay - 1));
+	rk_drm_vop_write4(sc, 0x0050,
+	    (vact_start << 16) | hact_start);
+	/*
+	 * XRGB8888 primary plane: force opaque blending state so stale
+	 * bootloader alpha registers cannot black-hole the scanout.
+	 */
+	rk_drm_vop_write4(sc, 0x0060, RK_DRM_VOP_WIN0_SRC_ALPHA_CTRL_OPAQUE);
+	rk_drm_vop_write4(sc, 0x0064, RK_DRM_VOP_WIN0_DST_ALPHA_CTRL_OPAQUE);
+	rk_drm_vop_write4(sc, 0x006c, RK_DRM_VOP_WIN0_CTRL2_PRIMARY);
+	rk_drm_vop_write4(sc, RK_DRM_VOP_POST_DSP_HACT_INFO,
+	    (hact_start << 16) | (hact_start + mode->hdisplay));
+	rk_drm_vop_write4(sc, RK_DRM_VOP_POST_DSP_VACT_INFO,
+	    (vact_start << 16) | (vact_start + mode->vdisplay));
+	rk_drm_vop_write4(sc, 0x0030, RK_DRM_VOP_WIN0_CTRL0_ENABLE);
+}
+
+static void
 rk_drm_vop_init_mode(struct rk_drm_softc *sc,
     const struct drm_display_mode *mode)
 {
@@ -718,9 +849,9 @@ rk_drm_vop_init_mode(struct rk_drm_softc *sc,
 
 	rk_drm_cru_write4(sc, 0x01bc,
 	    ((((0x1fu << 8) | (0x3u << 6) | 0x1fu) << 16) |
-	    ((3u << 8) | (1u << 6) | 1u)));
+	    ((3u << 8) | (1u << 7) | 1u)));
 	rk_drm_cru_write4(sc, 0x01c4,
-	    ((((1u << 11) | (0x3u << 8) | 0xffu) << 16) | 0x0000u));
+	    ((((1u << 11) | (0x3u << 8) | 0xffu) << 16) | 0x0100u));
 
 	sys_ctrl = rk_drm_vop_read4(sc, 0x0008);
 	dsp_ctrl0 = rk_drm_vop_read4(sc, 0x0010);
@@ -746,23 +877,7 @@ rk_drm_vop_init_mode(struct rk_drm_softc *sc,
 	    RK_DRM_VOP_DSP_CTRL1_HDMI_DCLK_POL;
 	rk_drm_vop_write4(sc, 0x0014, dsp_ctrl1);
 
-	rk_drm_vop_write4(sc, 0x0038, 0x00000000);
-	rk_drm_vop_write4(sc, 0x003c, sc->stride / 4);
-	rk_drm_vop_write4(sc, 0x0040, (uint32_t)sc->fb_pa);
-	rk_drm_vop_write4(sc, 0x0048,
-	    (((uint32_t)mode->vdisplay - 1) << 16) |
-	    ((uint32_t)mode->hdisplay - 1));
-	rk_drm_vop_write4(sc, 0x004c,
-	    (((uint32_t)mode->vdisplay - 1) << 16) |
-	    ((uint32_t)mode->hdisplay - 1));
-	rk_drm_vop_write4(sc, 0x0050,
-	    (vact_start << 16) | hact_start);
-	rk_drm_vop_write4(sc, 0x006c, RK_DRM_VOP_WIN0_CTRL2_PRIMARY);
-	rk_drm_vop_write4(sc, RK_DRM_VOP_POST_DSP_HACT_INFO,
-	    (hact_start << 16) | (hact_start + mode->hdisplay));
-	rk_drm_vop_write4(sc, RK_DRM_VOP_POST_DSP_VACT_INFO,
-	    (vact_start << 16) | (vact_start + mode->vdisplay));
-	rk_drm_vop_write4(sc, 0x0030, RK_DRM_VOP_WIN0_CTRL0_ENABLE);
+	rk_drm_vop_program_win0_opaque(sc, mode, hact_start, vact_start);
 	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_HTOTAL_HS_END,
 	    ((uint32_t)mode->htotal << 16) | rk_drm_mode_hsync_len(mode));
 	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_HACT_ST_END,
@@ -771,9 +886,190 @@ rk_drm_vop_init_mode(struct rk_drm_softc *sc,
 	    ((uint32_t)mode->vtotal << 16) | rk_drm_mode_vsync_len(mode));
 	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_VACT_ST_END,
 	    (vact_start << 16) | (vact_start + mode->vdisplay));
-	rk_drm_vop_write4(sc, 0x0000, 0x00000001);
+	/*
+	 * REG_CFG_DONE (offset 0x0000) is hiword-update: mask in upper 16
+	 * bits, value in lower. Writing 0x1 alone (mask bit clear) is a
+	 * silent no-op — the commit never fires, so all the staged VOP
+	 * register writes above stay in the shadow bank and never reach
+	 * the live registers. Correct form: 0x10001.
+	 */
+	rk_drm_vop_write4(sc, 0x0000, 0x00010001);
 	rk_drm_vop_pulse_dclk_reset(sc);
 	DELAY(40000);
+}
+
+/*
+ * VOP setup for the eDP/DP output path.
+ * Same VOP B + WIN0 + scanout-buffer programming as the HDMI variant,
+ * but enables EDP_EN instead of HDMI_EN in SYS_CTRL and skips the
+ * HDMI-specific DSP_CTRL1 pin polarity / DCLK polarity bits — the DP
+ * side of the pipeline is consumed by CDN-DP, which encapsulates the
+ * pixel stream into DP packets and drives its own clocks.
+ */
+static void
+rk_drm_vop_init_mode_dp(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
+{
+	uint32_t hact_start, vact_start;
+	uint32_t sys_ctrl, dsp_ctrl0, dsp_ctrl1, post_scl_ctrl;
+	uint32_t pin_pol, dp_pin_pol;
+
+	hact_start = rk_drm_mode_hact_start(mode);
+	vact_start = rk_drm_mode_vact_start(mode);
+
+	if (rk_drm_program_vpll(sc, mode->clock) != 0)
+		device_printf(sc->dev, "VPLL setup failed, continuing\n");
+
+	rk_drm_cru_write4(sc, 0x01bc,
+	    ((((0x1fu << 8) | (0x3u << 6) | 0x1fu) << 16) |
+	    ((3u << 8) | (1u << 6) | 1u)));
+	rk_drm_cru_write4(sc, 0x01c4,
+	    ((((1u << 11) | (0x3u << 8) | 0xffu) << 16) | 0x0000u));
+
+	sys_ctrl = rk_drm_vop_read4(sc, 0x0008);
+	dsp_ctrl0 = rk_drm_vop_read4(sc, 0x0010);
+	dsp_ctrl1 = rk_drm_vop_read4(sc, 0x0014);
+	post_scl_ctrl = rk_drm_vop_read4(sc, 0x0180);
+
+	/*
+	 * Live read of working the reference build shows SYS_CTRL = 0x20801800: both
+	 * dp_en (bit 11) and rgb_en (bit 12) set, plus reserved bits 23/29.
+	 * Despite the reference driver's output_type-switch in rockchip_drm_vop.c looking
+	 * mutually-exclusive, the actual settled state on RK3399 vop_big with
+	 * a working Cadence DP path carries both bits — rgb_en here is the
+	 * internal parallel-RGB output-formatter the Cadence framer consumes,
+	 * not an external mux selector.
+	 */
+	sys_ctrl &= ~(RK_DRM_VOP_SYS_CTRL_STANDBY |
+	    RK_DRM_VOP_SYS_CTRL_MMU_EN |
+	    RK_DRM_VOP_SYS_CTRL_HDMI_EN |
+	    RK_DRM_VOP_SYS_CTRL_EDP_EN |
+	    RK_DRM_VOP_SYS_CTRL_MIPI_EN |
+	    RK_DRM_VOP_SYS_CTRL_MIPI_DUAL);
+	sys_ctrl |= RK_DRM_VOP_SYS_CTRL_ENABLE |
+	    RK_DRM_VOP_SYS_CTRL_RGB_EN;
+	rk_drm_vop_write4(sc, 0x0008, sys_ctrl);
+
+	/*
+	 * the reference driver cdn_dp_atomic_check (cdn-dp-core.c:973) forces
+	 * `ROCKCHIP_OUT_MODE_AAAA` for the DP connector regardless of
+	 * pixel bus_format — the Cadence framer's input bus is 32-bit
+	 * with the alpha lane unused. P888 (24-bit packed) cycles VOP
+	 * output differently and breaks link sync (verified empirically
+	 * 2026-05-10: trying P888 dropped LANE0_1_STATUS 0x77→0x00 and
+	 * SINK_STATUS 0x01→0x00).
+	 */
+	dsp_ctrl0 &= ~RK_DRM_VOP_DSP_OUT_MODE_MASK;
+	dsp_ctrl0 |= RK_DRM_VOP_DSP_OUT_MODE_AAAA;
+	/*
+	 * On RK3399 vop_big (VOP version 3.5) DSP_CTRL0 bits 4..6 are NOT
+	 * pin polarity — the reference driver's `.pin_pol = VOP_REG_VER(... bits 4..6, 3, 0, 1)`
+	 * (rockchip_vop_reg.c:222) restricts that field to VOP 3.0/3.1.  On
+	 * 3.5, bit 5 is `p2i_en` and bits 4/6 are other functions.  DP pin
+	 * polarity lives in DSP_CTRL1[16:18] (handled below).
+	 *
+	 * Live read of working the reference build shows DSP_CTRL0 = 0x0f — only OUT_MODE
+	 * bits set; bit 7 (DCLK_POL) is also 0.  Clear all the legacy
+	 * pin_pol/dclk_pol/p2i/interlace bits and don't set DCLK_POL.
+	 */
+	pin_pol = 0;
+	if ((mode->flags & DRM_MODE_FLAG_NHSYNC) == 0)
+		pin_pol |= (1u << 0);
+	if ((mode->flags & DRM_MODE_FLAG_NVSYNC) == 0)
+		pin_pol |= (1u << 1);
+	dsp_ctrl0 &= ~(RK_DRM_VOP_DSP_CTRL0_PIN_POL_MASK |
+	    RK_DRM_VOP_DSP_CTRL0_DCLK_POL |
+	    RK_DRM_VOP_DSP_CTRL0_P2I_EN |
+	    RK_DRM_VOP_DSP_CTRL0_INTERLACE);
+	rk_drm_vop_write4(sc, 0x0010, dsp_ctrl0);
+
+	/*
+	 * DSP_CTRL1 polarities for Cadence DP path (RK3399).  Per the reference driver
+	 * rockchip_vop_reg.c and rockchip_drm_vop.c:
+	 *   bits 18:16 = dp_pin_pol  (bit 0 = HSYNC_POSITIVE,
+	 *                             bit 1 = VSYNC_POSITIVE,
+	 *                             bit 2 = DEN_NEGATIVE)
+	 *   bit  19    = dp_dclk_pol (the reference driver's DP encoder_enable forces 0)
+	 *   bits 20-31 are hdmi/edp/mipi pin+dclk polarity fields — clear
+	 *                them so prior HDMI/eDP state can't leak through.
+	 * For PHSYNC mode → set HSYNC_POSITIVE; for PVSYNC → set
+	 * VSYNC_POSITIVE.  NHSYNC/NVSYNC leave the bit cleared (the reference driver
+	 * rockchip_drm_vop.c:2885).
+	 */
+	dp_pin_pol = pin_pol;
+	dsp_ctrl1 &= ~(RK_DRM_VOP_DSP_CTRL1_DP_PIN_POL_MASK |
+	    RK_DRM_VOP_DSP_CTRL1_DP_DCLK_POL |
+	    RK_DRM_VOP_DSP_CTRL1_HDMI_PIN_POL_MASK |
+	    RK_DRM_VOP_DSP_CTRL1_HDMI_DCLK_POL);
+	dsp_ctrl1 |= (dp_pin_pol & 0x7) << 16;	/* dp_dclk_pol forced low */
+	/*
+	 * Match the reference driver's RGB888 setup: no dither-down or pre-dither on the
+	 * 32-bit AAAA Cadence path, but leave the dither selector at Allegro.
+	 */
+	dsp_ctrl1 &= ~((1u << 3) | (1u << 2) | (1u << 1));
+	dsp_ctrl1 |= (1u << 4);
+	rk_drm_vop_write4(sc, 0x0014, dsp_ctrl1);
+
+	/*
+	 * Keep the VOP->Cadence interface in plain RGB mode. the reference driver clears
+	 * data-swap and post-scaler YUV output state here; stale values can
+	 * yield a trained link that never produces visible pixels.
+	 */
+	dsp_ctrl0 &= ~(0x1fu << 12);	/* dsp_data_swap = 0 */
+	rk_drm_vop_write4(sc, 0x0010, dsp_ctrl0);
+	post_scl_ctrl &= ~(1u << 2);	/* dsp_out_yuv = 0 */
+	rk_drm_vop_write4(sc, 0x0180, post_scl_ctrl);
+	rk_drm_vop_write4(sc, 0x0018, 0x00000000);	/* dsp_background = 0 */
+
+	rk_drm_vop_program_win0_opaque(sc, mode, hact_start, vact_start);
+	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_HTOTAL_HS_END,
+	    ((uint32_t)mode->htotal << 16) | rk_drm_mode_hsync_len(mode));
+	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_HACT_ST_END,
+	    (hact_start << 16) | (hact_start + mode->hdisplay));
+	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_VTOTAL_VS_END,
+	    ((uint32_t)mode->vtotal << 16) | rk_drm_mode_vsync_len(mode));
+	rk_drm_vop_write4(sc, RK_DRM_VOP_DSP_VACT_ST_END,
+	    (vact_start << 16) | (vact_start + mode->vdisplay));
+	/*
+	 * REG_CFG_DONE (offset 0x0000) is hiword-update: mask in upper 16
+	 * bits, value in lower. Writing 0x1 alone (mask bit clear) is a
+	 * silent no-op — the commit never fires, so all the staged VOP
+	 * register writes above stay in the shadow bank and never reach
+	 * the live registers. Correct form: 0x10001.
+	 */
+	rk_drm_vop_write4(sc, 0x0000, 0x00010001);
+	rk_drm_vop_pulse_dclk_reset(sc);
+	DELAY(40000);
+}
+
+/*
+ * Public DP modeset entry point. Caller must have:
+ * - rk_drm attached (hw_attached = true)
+ * - CDN-DP firmware framer enabled (rk_cdn_dp stages 1..19)
+ *
+ * Programs VOP B for the requested mode and routes its output to the
+ * eDP path that CDN-DP consumes. Fills the framebuffer with a solid
+ * color so we can visually confirm pixels are flowing.
+ */
+int
+rk_drm_hw_modeset_dp(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
+{
+	if (!sc->hw_attached)
+		return (ENXIO);
+	if (mode == NULL || !rk_drm_hw_mode_valid(mode))
+		return (EINVAL);
+
+	rk_drm_fb_fill(sc, RK_DRM_FB_BOOT_COLOR);
+	rk_drm_display_domain_sanity(sc);
+	rk_drm_route_vop_to_dp(sc);
+	rk_drm_vop_init_mode_dp(sc, mode);
+	sc->output_enabled = true;
+	device_printf(sc->dev,
+	    "DP modeset: VOP B -> eDP path %ux%u@%u kHz, fb_pa=0x%jx\n",
+	    mode->hdisplay, mode->vdisplay, mode->clock,
+	    (uintmax_t)sc->fb_pa);
+	return (0);
 }
 
 int
@@ -786,7 +1082,14 @@ rk_drm_hw_set_scanout(struct rk_drm_softc *sc, vm_paddr_t paddr, uint32_t stride
 
 	rk_drm_vop_write4(sc, 0x003c, stride / 4);
 	rk_drm_vop_write4(sc, 0x0040, (uint32_t)paddr);
-	rk_drm_vop_write4(sc, 0x0000, 0x00000001);
+	/*
+	 * REG_CFG_DONE (offset 0x0000) is hiword-update: mask in upper 16
+	 * bits, value in lower. Writing 0x1 alone (mask bit clear) is a
+	 * silent no-op — the commit never fires, so all the staged VOP
+	 * register writes above stay in the shadow bank and never reach
+	 * the live registers. Correct form: 0x10001.
+	 */
+	rk_drm_vop_write4(sc, 0x0000, 0x00010001);
 	return (0);
 }
 
@@ -802,10 +1105,18 @@ rk_drm_hw_disable(struct rk_drm_softc *sc)
 	sys_ctrl = rk_drm_vop_read4(sc, 0x0008);
 	sys_ctrl &= ~(RK_DRM_VOP_SYS_CTRL_ENABLE |
 	    RK_DRM_VOP_SYS_CTRL_RGB_EN |
-	    RK_DRM_VOP_SYS_CTRL_HDMI_EN);
+	    RK_DRM_VOP_SYS_CTRL_HDMI_EN |
+	    RK_DRM_VOP_SYS_CTRL_EDP_EN);
 	sys_ctrl |= RK_DRM_VOP_SYS_CTRL_STANDBY;
 	rk_drm_vop_write4(sc, 0x0008, sys_ctrl);
-	rk_drm_vop_write4(sc, 0x0000, 0x00000001);
+	/*
+	 * REG_CFG_DONE (offset 0x0000) is hiword-update: mask in upper 16
+	 * bits, value in lower. Writing 0x1 alone (mask bit clear) is a
+	 * silent no-op — the commit never fires, so all the staged VOP
+	 * register writes above stay in the shadow bank and never reach
+	 * the live registers. Correct form: 0x10001.
+	 */
+	rk_drm_vop_write4(sc, 0x0000, 0x00010001);
 
 	/*
 	 * Blank TMDS output but keep HPD sense alive so native hotplug polling
@@ -1257,6 +1568,543 @@ rk_drm_hdmi_phy_init(struct rk_drm_softc *sc,
 	return (ETIMEDOUT);
 }
 
+/*
+ * rk_drm_hdmi_configure_audio
+ *
+ * HDMI audio block setup, called at the end of every modeset so the
+ * audio path tracks the active pixel clock.  Programs the Designware
+ * HDMI TX audio sub-block to receive 48 kHz / 16-bit / 2-channel I2S
+ * input and wrap each sample frame in a properly-CRCed Audio Sample
+ * Packet that's interleaved with the video data islands on TMDS.
+ *
+ * Six register groups get touched, in order:
+ *
+ *   1. AUD_N1/N2/N3 -- the N divider that, paired with hardware-
+ *      computed CTS, produces the audio recovery clock at the sink.
+ *      Spec table values vary per pixel clock; we cover the common
+ *      modes (25.17/27.02/74.17/148.5 MHz) and fall back to 6144 for
+ *      unknown clocks (the Designware default for 48 kHz).
+ *
+ *   2. AUD_CTS3 -- clears N_SHIFT/CTS_MANUAL so hardware computes CTS
+ *      automatically instead of expecting software to write it.
+ *
+ *   3. AUD_CONF0 -- selects I2S as input source (vs SPDIF) and enables
+ *      one I2S input pair (CH2 = stereo).
+ *
+ *   4. AUD_CONF1 -- I2S left-justified, 16-bit sample width.
+ *
+ *   5. AUD_INPUTCLKFS -- BCLK : LRCK ratio = 64fs (matches the I2S2
+ *      master we drive from rk_i2s).
+ *
+ *   6. FC_AUDICONF{0..3} + FC_AUDSV -- Audio InfoFrame: CC=1 (2 ch),
+ *      default speaker mapping, both subpackets valid.  This is what
+ *      the sink uses to detect "audio is present" and which channels
+ *      are live.
+ *
+ * Finally MC_CLKDIS bit 3 is cleared to ungate the audio domain.
+ *
+ * No PCM samples flow until the I2S2 side is driving BCLK/LRCK and a
+ * userland writer is producing samples to /dev/dsp0; that path is
+ * provided by rk_i2s + audio_soc + the sound framework.  This routine
+ * just makes the HDMI TX side ready to accept whatever shows up on
+ * its I2S input pins.
+ */
+static void
+rk_drm_hdmi_configure_audio(struct rk_drm_softc *sc,
+    const struct drm_display_mode *mode)
+{
+	uint32_t n;
+	uint8_t val;
+
+	switch (mode->clock) {
+	case 25170:
+		n = 6864;
+		break;
+	case 27020:
+		n = 6144;
+		break;
+	case 74170:
+		n = 11648;
+		break;
+	case 148350:
+	case 148500:
+		n = 5824;
+		break;
+	default:
+		n = 6144;
+		break;
+	}
+
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_AUD_N1, n & 0xff);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_AUD_N2, (n >> 8) & 0xff);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_AUD_N3, (n >> 16) & 0xff);
+
+	val = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_AUD_CTS3);
+	val &= ~(RK_DRM_HDMI_AUD_CTS3_N_SHIFT_MASK |
+	    RK_DRM_HDMI_AUD_CTS3_CTS_MANUAL);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_AUD_CTS3, val);
+
+	val = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_AUD_CONF0);
+	val &= ~RK_DRM_HDMI_AUD_CONF0_INTERFACE_MASK;
+	val |= RK_DRM_HDMI_AUD_CONF0_INTERFACE_IIS;
+	val &= ~RK_DRM_HDMI_AUD_CONF0_I2SINEN_MASK;
+	val |= RK_DRM_HDMI_AUD_CONF0_I2SINEN_CH2;
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_AUD_CONF0, val);
+
+	val = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_AUD_CONF1);
+	val &= ~RK_DRM_HDMI_AUD_CONF1_DATAMODE_MASK;
+	val |= RK_DRM_HDMI_AUD_CONF1_DATAMODE_IIS;
+	val &= ~RK_DRM_HDMI_AUD_CONF1_DATWIDTH_MASK;
+	val |= RK_DRM_HDMI_AUD_CONF1_DATWIDTH_16BIT;
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_AUD_CONF1, val);
+
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_AUD_INPUTCLKFS,
+	    RK_DRM_HDMI_AUD_INPUTCLKFS_64);
+
+	/* Audio InfoFrame: 2 channels, default speaker mapping */
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AUDICONF0,
+	    RK_DRM_HDMI_FC_AUDICONF0_CC_2CH);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AUDICONF1, 0);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AUDICONF2, 0);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AUDICONF3, 0);
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_FC_AUDSV,
+	    RK_DRM_HDMI_FC_AUDSV_LR_VALID);
+
+	/* Ungate the audio clock domain in the main controller */
+	val = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_MC_CLKDIS);
+	val &= ~RK_DRM_HDMI_MC_CLKDIS_AUDCLK_DISABLE;
+	rk_drm_hdmi_write1(sc, RK_DRM_HDMI_MC_CLKDIS, val);
+
+	device_printf(sc->dev,
+	    "HDMI audio: N=%u 48kHz I2S 2ch 16bit (no PCM source yet)\n", n);
+}
+
+/*
+ * rk_drm_hw_audio_i2s_probe
+ *
+ * Stage 2 reconnaissance helper: transiently map the RK3399 I2S2
+ * controller (0xff8a0000, the on-chip-only I2S that feeds the HDMI
+ * TX's audio input) and read back its core registers.  Used to
+ * decide whether the I2S2 clock gate + reset are already in a state
+ * that lets us program it from rk_drm, or whether we need to do CRU
+ * work first.
+ *
+ * Reads return all-1s if the APB clock to the I2S2 block is gated;
+ * sensible values (TXCR/RXCR/CKR/XFER reset defaults) if the block
+ * is reachable.  No side effects beyond the temporary VA mapping.
+ *
+ * Output is logged via device_printf(); caller does not need to hold
+ * any locks because we touch I2S2 registers only, not shared rk_drm
+ * state.
+ */
+void
+rk_drm_hw_audio_i2s_probe(struct rk_drm_softc *sc)
+{
+	vm_offset_t va;
+	const vm_paddr_t i2s2_pa = 0xff8a0000;
+	const size_t i2s2_size = 0x1000;
+	uint32_t txcr, rxcr, ckr, dmacr, intcr, intsr, xfer;
+
+	va = (vm_offset_t)pmap_mapdev(i2s2_pa, i2s2_size);
+	if (va == 0) {
+		device_printf(sc->dev, "i2s2_probe: pmap_mapdev failed\n");
+		return;
+	}
+
+	txcr  = *(volatile uint32_t *)(va + 0x0000);
+	rxcr  = *(volatile uint32_t *)(va + 0x0004);
+	ckr   = *(volatile uint32_t *)(va + 0x0008);
+	dmacr = *(volatile uint32_t *)(va + 0x0010);
+	intcr = *(volatile uint32_t *)(va + 0x0014);
+	intsr = *(volatile uint32_t *)(va + 0x0018);
+	xfer  = *(volatile uint32_t *)(va + 0x001c);
+
+	device_printf(sc->dev,
+	    "i2s2_probe: TXCR=0x%08x RXCR=0x%08x CKR=0x%08x\n",
+	    txcr, rxcr, ckr);
+	device_printf(sc->dev,
+	    "i2s2_probe: DMACR=0x%08x INTCR=0x%08x INTSR=0x%08x XFER=0x%08x\n",
+	    dmacr, intcr, intsr, xfer);
+	if (txcr == 0xffffffff && ckr == 0xffffffff) {
+		device_printf(sc->dev,
+		    "i2s2_probe: all-1s reads -> APB clock gated, "
+		    "need CRU CLK_I2S2/HCLK_I2S2 ungate before programming\n");
+	} else if (txcr == 0 && ckr == 0) {
+		device_printf(sc->dev,
+		    "i2s2_probe: reset defaults -> APB alive, "
+		    "ready to program TXCR/CKR/XFER\n");
+	} else {
+		device_printf(sc->dev,
+		    "i2s2_probe: non-default values -> already programmed by "
+		    "another driver, do not double-init\n");
+	}
+
+	pmap_unmapdev((void *)va, i2s2_size);
+}
+
+/*
+ * rk_drm_hw_audio_i2s_refill
+ *
+ * Callout body invoked periodically while continuous-silence refill
+ * is active.  Each invocation reads I2S2's current TX FIFO fill level
+ * (TXFIFOLR), computes free space, writes zero samples to fill it,
+ * and schedules itself to run again before the FIFO would underrun.
+ *
+ * Timing: at 48 kHz stereo 16-bit, two 16-bit samples pack into one
+ * 32-bit FIFO word, so 32 FIFO entries = 64 samples = ~1333 us of
+ * audio.  We re-arm at 500 us to stay well ahead of underrun even if
+ * the system briefly defers the callout.
+ *
+ * Caller (sysctl handler) must serialize start/stop so this routine
+ * does not race with callout teardown.
+ */
+static void
+rk_drm_hw_audio_i2s_refill(void *arg)
+{
+	struct rk_drm_softc *sc = arg;
+	uint32_t level;
+	int free, i;
+
+	if (!sc->audio_refill_running || sc->i2s2_va == 0)
+		return;
+
+	level = *(volatile uint32_t *)(sc->i2s2_va + 0x000c) & 0x3f;
+	free = 32 - (int)level;
+	for (i = 0; i < free; i++)
+		*(volatile uint32_t *)(sc->i2s2_va + 0x0024) = 0;
+
+	callout_reset_sbt(&sc->audio_refill_co, SBT_1MS / 2, 0,
+	    rk_drm_hw_audio_i2s_refill, sc, 0);
+}
+
+/*
+ * rk_drm_hw_audio_i2s_refill_start
+ *
+ * Begin continuous-silence refill of I2S2 so the HDMI TX sees a
+ * stable BCLK / LRCK / SDATA stream forever (or until stop is
+ * called).  Maps I2S2 once into sc->i2s2_va if not already mapped,
+ * pre-seeds the FIFO, asserts XFER = TXS_START, and arms the callout.
+ *
+ * Idempotent: subsequent calls while already running are no-ops.
+ * Returns 0 on success, ENXIO on map failure.
+ */
+int
+rk_drm_hw_audio_i2s_refill_start(struct rk_drm_softc *sc)
+{
+	const vm_paddr_t i2s2_pa = 0xff8a0000;
+	const size_t i2s2_size = 0x1000;
+	int i;
+
+	if (sc->audio_refill_running)
+		return (0);
+
+	if (sc->i2s2_va == 0) {
+		sc->i2s2_va =
+		    (vm_offset_t)pmap_mapdev(i2s2_pa, i2s2_size);
+		if (sc->i2s2_va == 0) {
+			device_printf(sc->dev,
+			    "audio_i2s_refill_start: pmap_mapdev failed\n");
+			return (ENXIO);
+		}
+	}
+
+	/* Pre-seed FIFO with 32 zero samples */
+	for (i = 0; i < 32; i++)
+		*(volatile uint32_t *)(sc->i2s2_va + 0x0024) = 0;
+	/* Start TX */
+	*(volatile uint32_t *)(sc->i2s2_va + 0x001c) = 0x00000001;
+	__asm volatile("dsb sy" ::: "memory");
+
+	sc->audio_refill_running = true;
+	callout_reset_sbt(&sc->audio_refill_co, SBT_1MS / 2, 0,
+	    rk_drm_hw_audio_i2s_refill, sc, 0);
+	device_printf(sc->dev,
+	    "audio_i2s_refill: started (500us callout, silence)\n");
+	return (0);
+}
+
+/*
+ * rk_drm_hw_audio_i2s_refill_stop
+ *
+ * Cancel the continuous refill callout, drain any in-flight callback,
+ * and clear XFER so I2S2 stops driving clocks.  Safe to call when
+ * not running.
+ */
+void
+rk_drm_hw_audio_i2s_refill_stop(struct rk_drm_softc *sc)
+{
+	if (!sc->audio_refill_running)
+		return;
+	sc->audio_refill_running = false;
+	callout_drain(&sc->audio_refill_co);
+	if (sc->i2s2_va != 0)
+		*(volatile uint32_t *)(sc->i2s2_va + 0x001c) = 0;
+	device_printf(sc->dev, "audio_i2s_refill: stopped\n");
+}
+
+/*
+ * rk_drm_hw_audio_i2s_start
+ *
+ * Stage 2 active path: kick I2S2 into transmitting silence so the
+ * HDMI TX gets real BCLK / LRCK / SDATA at its on-chip audio input.
+ * Without this, the HDMI audio block packetizes against a stopped
+ * I2S clock and the sink either ignores audio or reports the link
+ * as silent.
+ *
+ * Sequence:
+ *   1. Map I2S2 (0xff8a0000) transiently.
+ *   2. Snapshot existing TXCR/CKR — the rk_i2s driver may have
+ *      already applied a sensible 48 kHz / 16-bit / 2-channel master
+ *      mode programming on attach, in which case we leave it alone.
+ *      If TXCR has not been programmed at all (zero value) we apply
+ *      our defaults.
+ *   3. Pre-seed the TX FIFO with up to 32 zero samples (the FIFO is
+ *      32 entries deep) so the first XFER cycle has data to drain.
+ *   4. Write XFER = TXS_START to begin clocking.  The FIFO will
+ *      empty in ~666 us at 48 kHz 16-bit stereo; clocks then stop on
+ *      underrun.  This is sufficient for HDMI-side observation —
+ *      the audio packetizer locks to the brief BCLK burst and the
+ *      sink reports "audio detected."  Continuous clocking requires
+ *      a DMA or interrupt-driven refill which is out of scope here.
+ *
+ * Reports the post-start XFER and INTSR values to dmesg so we can
+ * see the START bit took, and whether any underrun fired during the
+ * burst.
+ */
+void
+rk_drm_hw_audio_i2s_start(struct rk_drm_softc *sc)
+{
+	vm_offset_t va;
+	const vm_paddr_t i2s2_pa = 0xff8a0000;
+	const size_t i2s2_size = 0x1000;
+	uint32_t txcr, ckr, xfer_before, xfer_after, intsr;
+	int i;
+
+	va = (vm_offset_t)pmap_mapdev(i2s2_pa, i2s2_size);
+	if (va == 0) {
+		device_printf(sc->dev, "i2s2_start: pmap_mapdev failed\n");
+		return;
+	}
+
+	txcr = *(volatile uint32_t *)(va + 0x0000);
+	ckr  = *(volatile uint32_t *)(va + 0x0008);
+
+	/* If TXCR is unprogrammed, set 16-bit I2S, 2-channel, normal IBM */
+	if (txcr == 0) {
+		*(volatile uint32_t *)(va + 0x0000) = 0x0000000f;
+		device_printf(sc->dev,
+		    "i2s2_start: TXCR was 0, programmed 0x0f (I2S 16-bit)\n");
+	}
+	/* If CKR is unprogrammed, set master mode, MDIV/RSD/TSD = 32 */
+	if (ckr == 0) {
+		*(volatile uint32_t *)(va + 0x0008) = 0x00071f1f;
+		device_printf(sc->dev,
+		    "i2s2_start: CKR was 0, programmed master/32-fs\n");
+	}
+
+	/* Seed TX FIFO with 32 zero samples */
+	for (i = 0; i < 32; i++)
+		*(volatile uint32_t *)(va + 0x0024) = 0;
+
+	xfer_before = *(volatile uint32_t *)(va + 0x001c);
+
+	/* Start TX */
+	*(volatile uint32_t *)(va + 0x001c) = 0x00000001;
+	__asm volatile("dsb sy" ::: "memory");
+
+	/* Brief settle — XFER status reflects current state immediately */
+	DELAY(100);
+
+	xfer_after = *(volatile uint32_t *)(va + 0x001c);
+	intsr      = *(volatile uint32_t *)(va + 0x0018);
+
+	device_printf(sc->dev,
+	    "i2s2_start: XFER %#x -> %#x, INTSR=%#x %s%s\n",
+	    xfer_before, xfer_after, intsr,
+	    (intsr & 0x2) ? "TX_UNDERRUN " : "",
+	    (intsr & 0x1) ? "TX_FIFO_EMPTY" : "");
+
+	pmap_unmapdev((void *)va, i2s2_size);
+}
+
+/*
+ * rk_drm_hw_audio_dump
+ *
+ * Read back the HDMI TX audio block registers and print them to
+ * dmesg.  Used as a diagnostic to confirm rk_drm_hdmi_configure_audio()
+ * actually committed the values we wrote (registers can fail to write
+ * if the HDMI APB bus is gated, the controller is in reset, or the
+ * audio clock domain is off).  The dump covers the full Stage 1 path:
+ *   - N divider (n1/n2/n3) and CTS3 control
+ *   - Audio interface config (CONF0/CONF1/INPUTCLKFS)
+ *   - Main controller clock disable mask (audclk gate state)
+ *   - Audio InfoFrame fields (FC_AUDICONF0..3, FC_AUDSV)
+ *
+ * Caller may hold sc->hw_lock to serialize against modeset.  Safe to
+ * call when the HDMI is not yet attached — returns early in that case.
+ */
+/*
+ * Dump VOP B + relevant CRU registers to dmesg. Used to verify the modeset
+ * actually programmed the hardware, distinguishing "register writes happened"
+ * (should be visible in our dmesg printf logs) from "registers actually hold
+ * those values now" (only direct readback proves).
+ */
+void
+rk_drm_hw_vop_dump(struct rk_drm_softc *sc)
+{
+	uint32_t cfg_done, sys_ctrl, dsp_ctrl0, dsp_ctrl1, win0_ctrl0;
+	uint32_t win0_ystride, win0_yrgb_mst, win0_act, win0_dsp_inf;
+	uint32_t win0_dsp_st, win0_src_alpha, win0_dst_alpha;
+	uint32_t htotal, hact, vtotal, vact, intr_status;
+
+	if (!sc->hw_attached) {
+		device_printf(sc->dev, "vop_dump: not attached\n");
+		return;
+	}
+
+	cfg_done    = rk_drm_vop_read4(sc, 0x0000);
+	sys_ctrl    = rk_drm_vop_read4(sc, 0x0008);
+	dsp_ctrl0   = rk_drm_vop_read4(sc, 0x0010);
+	dsp_ctrl1   = rk_drm_vop_read4(sc, 0x0014);
+	win0_ctrl0  = rk_drm_vop_read4(sc, 0x0030);
+	win0_ystride= rk_drm_vop_read4(sc, 0x003c);
+	win0_yrgb_mst = rk_drm_vop_read4(sc, 0x0040);
+	win0_act    = rk_drm_vop_read4(sc, 0x0048);
+	win0_dsp_inf= rk_drm_vop_read4(sc, 0x004c);
+	win0_dsp_st = rk_drm_vop_read4(sc, 0x0050);
+	win0_src_alpha = rk_drm_vop_read4(sc, 0x0060);
+	win0_dst_alpha = rk_drm_vop_read4(sc, 0x0064);
+	htotal      = rk_drm_vop_read4(sc, 0x0188);
+	hact        = rk_drm_vop_read4(sc, 0x018c);
+	vtotal      = rk_drm_vop_read4(sc, 0x0190);
+	vact        = rk_drm_vop_read4(sc, 0x0194);
+	intr_status = rk_drm_vop_read4(sc, 0x00ac);
+
+	device_printf(sc->dev,
+	    "vop_dump: CFG_DONE=0x%08x SYS_CTRL=0x%08x DSP_CTRL0=0x%08x DSP_CTRL1=0x%08x\n",
+	    cfg_done, sys_ctrl, dsp_ctrl0, dsp_ctrl1);
+	device_printf(sc->dev,
+	    "vop_dump: WIN0 CTRL0=0x%08x YSTRIDE=0x%08x YRGB_MST=0x%08x ACT=0x%08x DSP_INF=0x%08x DSP_ST=0x%08x SRC_ALPHA=0x%08x DST_ALPHA=0x%08x\n",
+	    win0_ctrl0, win0_ystride, win0_yrgb_mst, win0_act, win0_dsp_inf,
+	    win0_dsp_st, win0_src_alpha, win0_dst_alpha);
+	device_printf(sc->dev,
+	    "vop_dump: HTOTAL=0x%08x HACT=0x%08x VTOTAL=0x%08x VACT=0x%08x INTR_STATUS=0x%08x\n",
+	    htotal, hact, vtotal, vact, intr_status);
+	{
+		uint32_t soc_con9, soc_con20;
+		soc_con9  = rk_drm_grf_read4(sc, RK_DRM_SYS_GRF_SOC_CON9);
+		soc_con20 = rk_drm_grf_read4(sc, RK_DRM_SYS_GRF_SOC_CON20);
+		device_printf(sc->dev,
+		    "vop_dump: GRF SOC_CON9=0x%08x (DP_SEL_VOP_LIT bit12=%u → %s),"
+		    " SOC_CON20=0x%08x (EDP_LCDC_SEL bit5=%u → %s)\n",
+		    soc_con9, !!(soc_con9 & RK_DRM_GRF_DP_SEL_VOP_LIT),
+		    (soc_con9 & RK_DRM_GRF_DP_SEL_VOP_LIT) ? "VOP_LIT" : "VOP_BIG",
+		    soc_con20, !!(soc_con20 & RK_DRM_GRF_EDP_LCDC_SEL),
+		    (soc_con20 & RK_DRM_GRF_EDP_LCDC_SEL) ? "VOP_LIT" : "VOP_BIG");
+	}
+	{
+		/*
+		 * VPLL state + DCLK_VOP0 source/divisor decode.
+		 * VPLL Fout = (24 MHz * FBDIV) / (REFDIV * POSTDIV1 * POSTDIV2)
+		 * CON0 [11:0]  = FBDIV
+		 * CON1 [5:0]   = REFDIV
+		 * CON1 [10:8]  = POSTDIV1
+		 * CON1 [14:12] = POSTDIV2
+		 * CON2 [31]    = LOCK
+		 * CON3 [9:8]   = PLL_MODE  (0=slow, 1=normal, 2=deepslow)
+		 *
+		 * Per the reference driver clk-rk3399.c:1267 `COMPOSITE(DCLK_VOP0_DIV, ...,
+		 * RK3399_CLKSEL_CON(49), 8, 2, MFLAGS, 0, 8, DFLAGS, ...)`:
+		 *   CRU CLKSEL_CON49 = offset 0x01c4
+		 *     [7:0]  DCLK_VOP0_DIV  (8-bit divider, rockchip composite
+		 *                            convention: actual = field+1)
+		 *     [9:8]  DCLK_VOP0_SEL  (0=VPLL, 1=CPLL, 2=GPLL)
+		 */
+		uint32_t con0 = rk_drm_cru_read4(sc, RK_DRM_CRU_VPLL_CON0);
+		uint32_t con1 = rk_drm_cru_read4(sc, RK_DRM_CRU_VPLL_CON1);
+		uint32_t con2 = rk_drm_cru_read4(sc, RK_DRM_CRU_VPLL_CON2);
+		uint32_t con3 = rk_drm_cru_read4(sc, RK_DRM_CRU_VPLL_CON3);
+		uint32_t cksel_con47 = rk_drm_cru_read4(sc, 0x01bc);
+		uint32_t cksel_con49 = rk_drm_cru_read4(sc, 0x01c4);
+		uint32_t fbdiv = con0 & 0xfff;
+		uint32_t refdiv = con1 & 0x3f;
+		uint32_t postdiv1 = (con1 >> 8) & 0x7;
+		uint32_t postdiv2 = (con1 >> 12) & 0x7;
+		uint64_t fout_khz = 0;
+		if (refdiv && postdiv1 && postdiv2)
+			fout_khz = ((uint64_t)24000 * fbdiv) /
+			    ((uint64_t)refdiv * postdiv1 * postdiv2);
+		uint32_t dclk_div = (cksel_con49 & 0xff) + 1;
+		uint32_t dclk_pll_sel = (cksel_con49 >> 8) & 0x3;
+		static const char * const pll_names[] = {"VPLL","CPLL","GPLL","?"};
+		device_printf(sc->dev,
+		    "vop_dump: VPLL CON0=0x%08x CON1=0x%08x CON2=0x%08x CON3=0x%08x\n",
+		    con0, con1, con2, con3);
+		device_printf(sc->dev,
+		    "vop_dump: VPLL fbdiv=%u refdiv=%u pd1=%u pd2=%u Fout=%llu kHz "
+		    "LOCK=%u mode=%u\n",
+		    fbdiv, refdiv, postdiv1, postdiv2,
+		    (unsigned long long)fout_khz,
+		    !!(con2 & RK_DRM_CRU_VPLL_CON2_LOCK),
+		    (con3 >> 8) & 0x3);
+		device_printf(sc->dev,
+		    "vop_dump: CRU CLKSEL_CON47=0x%08x CLKSEL_CON49=0x%08x "
+		    "DCLK_VOP0_DIV=%u SEL=%u (%s) -> dclk_vop0 ~%llu kHz\n",
+		    cksel_con47, cksel_con49, dclk_div, dclk_pll_sel,
+		    pll_names[dclk_pll_sel], (unsigned long long)(fout_khz / dclk_div));
+	}
+	device_printf(sc->dev,
+	    "vop_dump: SYS_CTRL decode: ENABLE=%d STANDBY=%d RGB_EN=%d HDMI_EN=%d EDP_EN=%d MIPI_EN=%d MMU_EN=%d\n",
+	    !!(sys_ctrl & RK_DRM_VOP_SYS_CTRL_ENABLE),
+	    !!(sys_ctrl & RK_DRM_VOP_SYS_CTRL_STANDBY),
+	    !!(sys_ctrl & RK_DRM_VOP_SYS_CTRL_RGB_EN),
+	    !!(sys_ctrl & RK_DRM_VOP_SYS_CTRL_HDMI_EN),
+	    !!(sys_ctrl & RK_DRM_VOP_SYS_CTRL_EDP_EN),
+	    !!(sys_ctrl & RK_DRM_VOP_SYS_CTRL_MIPI_EN),
+	    !!(sys_ctrl & RK_DRM_VOP_SYS_CTRL_MMU_EN));
+	device_printf(sc->dev,
+	    "vop_dump: WIN0 ENABLE=%d (ctrl0 bit 0)\n", win0_ctrl0 & 1);
+}
+
+void
+rk_drm_hw_audio_dump(struct rk_drm_softc *sc)
+{
+	uint8_t n1, n2, n3, cts3, conf0, conf1, clkfs, clkdis;
+	uint8_t aic0, aic1, aic2, aic3, audsv;
+	uint32_t n;
+
+	if (!sc->hw_attached || sc->hdmi_va == 0) {
+		device_printf(sc->dev, "audio_dump: HDMI not attached\n");
+		return;
+	}
+
+	n1    = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_AUD_N1);
+	n2    = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_AUD_N2);
+	n3    = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_AUD_N3);
+	cts3  = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_AUD_CTS3);
+	conf0 = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_AUD_CONF0);
+	conf1 = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_AUD_CONF1);
+	clkfs = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_AUD_INPUTCLKFS);
+	clkdis = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_MC_CLKDIS);
+	aic0 = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_FC_AUDICONF0);
+	aic1 = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_FC_AUDICONF1);
+	aic2 = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_FC_AUDICONF2);
+	aic3 = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_FC_AUDICONF3);
+	audsv = rk_drm_hdmi_read1(sc, RK_DRM_HDMI_FC_AUDSV);
+	n = ((uint32_t)n3 << 16) | ((uint32_t)n2 << 8) | n1;
+
+	device_printf(sc->dev,
+	    "audio_dump: N=%u (n1=0x%02x n2=0x%02x n3=0x%02x) cts3=0x%02x\n",
+	    n, n1, n2, n3, cts3);
+	device_printf(sc->dev,
+	    "audio_dump: conf0=0x%02x conf1=0x%02x inputclkfs=0x%02x clkdis=0x%02x audclk=%s\n",
+	    conf0, conf1, clkfs, clkdis,
+	    (clkdis & RK_DRM_HDMI_MC_CLKDIS_AUDCLK_DISABLE) ? "GATED" : "running");
+	device_printf(sc->dev,
+	    "audio_dump: aic0=0x%02x aic1=0x%02x aic2=0x%02x aic3=0x%02x audsv=0x%02x\n",
+	    aic0, aic1, aic2, aic3, audsv);
+}
+
 int
 rk_drm_hw_modeset(struct rk_drm_softc *sc, const struct drm_display_mode *mode)
 {
@@ -1284,6 +2132,7 @@ rk_drm_hw_modeset(struct rk_drm_softc *sc, const struct drm_display_mode *mode)
 	}
 	rk_drm_dw_hdmi_finish_mode(sc, mode);
 	rk_drm_hdmi_enable_hdmi_mode(sc, mode);
+	rk_drm_hdmi_configure_audio(sc, mode);
 	sc->output_enabled = true;
 	return (0);
 }
