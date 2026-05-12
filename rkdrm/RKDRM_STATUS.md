@@ -159,6 +159,59 @@ Current next blocker:
   - extcon / Type-C state consumption
   - link-training and DRM connector progression
 
+## 2026-05-12 USB-C DisplayPort End-To-End
+
+End-to-end USB-C DisplayPort scanout is working on the RockPro64 target.
+On boot, the rp64dbg lights an attached XYM W156F1 portable monitor and
+renders the FreeBSD `vt(4)` console plus SLIM/Xorg login at native
+1920x1080 over a single USB-C cable.
+
+What landed end-to-end:
+
+- `fusb302` PD / VDM altmode bring-up with stable HPD signalling
+- `rk_typec_phy` DP-altmode PHY init (CC-orientation aware, 2-lane HBR)
+- `rk_cdn_dp` Cadence MHDP firmware load + mailbox protocol +
+  link-training driver (CR + EQ at HBR 2-lane, software-trained)
+- DRM-driven modeset that pushes the Cadence framer MSA + VOP_BIG
+  scanout in lockstep
+- HPD-IRQ-driven retrain loop (`rk_drm_hpd_task` observes the
+  sink-side LINK_STATUS_UPDATED via the partner's VDM ATTENTION
+  dp_status and reruns CR + EQ without disturbing the framer)
+- shared header `sys/arm64/rockchip/rk_dp_forced_mode.h` as the single
+  source of truth for the forced DP mode parameters; both `rk_cdn_dp`
+  and `rk_drm` consume it
+- non-destructive diagnostic sysctls on `dev.rk_cdn_dp.0`:
+  - `probe_warm` — enable cdn-dp clocks without resetting the µCPU
+  - `framer_dump_now` — dump Cadence framer regs via mailbox
+  - `retrain_now`, `display_power`, `backlight_power`
+  - `dpcd_write_now` / `dpcd_read_now` — generic AUX poker
+
+Panel-specific hard rule discovered during bring-up: the XYM W156F1
+(and likely many HDMI-to-USB-C converter panels) gates its backlight
+on a hidden stream-validity check that **rejects CEA-861 standard
+1080p variants** (PHSYNC + narrow hsync 44).  Only DMT-style timing
+(NHSYNC + wide hsync 144) makes the backlight come on, even though
+the EDID falsely advertises CEA VIC 16 / VIC 31 as native modes.
+DPCD-based eDP backlight control (0x720 / 0x721) is silently ignored
+on this panel — AUX writes ACK and the sink retains the values, but
+no observable backlight change.
+
+Two changes pin the forced mode end-to-end:
+
+- `rk_drm_connector_get_modes` INJECTS the DMT-style 1920x1080 mode
+  into `connector->probed_modes` as PREFERRED.  Userspace (Xorg,
+  SLIM, fb_helper) sees the working timing and allocates a 1920-wide
+  GEM framebuffer with matching stride.
+- `rk_drm_crtc_mode_set` force-overrides DRM's chosen mode with the
+  forced-mode header values on the USB-C DP path.  Even if DRM picks
+  a CEA variant from the EDID-derived list, the framer + VOP both
+  end up driving the custom timing.
+
+`fusb302` and `rk_cdn_dp` are now compiled into `RP64KERN_RKDRM`
+(previously modules in `/etc/rc.conf kld_list`) so DP bring-up
+happens during normal device probe rather than userland init time,
+moving panel bring-up several seconds earlier in boot.
+
 ## Still In Progress
 
 This branch is not a complete desktop-grade DRM stack yet.
